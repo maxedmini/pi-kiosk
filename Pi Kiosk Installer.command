@@ -136,7 +136,7 @@ if [ "$INSTALL_MODE" = "master" ]; then
         rm -f "$LOCAL_TARBALL"
         HOSTNAME_ENV=""
         [ -n "$HOSTNAME_OVERRIDE" ] && HOSTNAME_ENV="HOSTNAME_OVERRIDE=$HOSTNAME_OVERRIDE"
-        SSH_INSTALL_CMD="rm -rf $REMOTE_DIR; mkdir -p $REMOTE_DIR; tar -xzf $REMOTE_TARBALL -C $REMOTE_DIR; "
+        SSH_INSTALL_CMD="rm -rf $REMOTE_DIR; mkdir -p $REMOTE_DIR; tar --warning=no-unknown-keyword -xzf $REMOTE_TARBALL -C $REMOTE_DIR; "
         INSTALL_FLAGS=""
         if [[ "$SKIP_UPDATES_CHOICE" =~ ^[Yy]$ ]]; then
             INSTALL_FLAGS="$INSTALL_FLAGS --skip-updates"
@@ -196,7 +196,7 @@ else
         rm -f "$LOCAL_TARBALL"
         HOSTNAME_ENV=""
         [ -n "$HOSTNAME_OVERRIDE" ] && HOSTNAME_ENV="HOSTNAME_OVERRIDE=$HOSTNAME_OVERRIDE"
-        SSH_INSTALL_CMD="rm -rf $REMOTE_DIR; mkdir -p $REMOTE_DIR; tar -xzf $REMOTE_TARBALL -C $REMOTE_DIR; "
+        SSH_INSTALL_CMD="rm -rf $REMOTE_DIR; mkdir -p $REMOTE_DIR; tar --warning=no-unknown-keyword -xzf $REMOTE_TARBALL -C $REMOTE_DIR; "
         INSTALL_FLAGS=""
         if [[ "$SKIP_UPDATES_CHOICE" =~ ^[Yy]$ ]]; then
             INSTALL_FLAGS="$INSTALL_FLAGS --skip-updates"
