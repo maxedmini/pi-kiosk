@@ -1117,6 +1117,35 @@ def handle_kiosk_status(data):
         socketio.emit('displays_updated', serialize_displays())
 
 
+@socketio.on('kiosk_health')
+def handle_kiosk_health(data):
+    """Handle health metrics from kiosk."""
+    sid = request.sid
+    hostname = data.get('hostname')
+
+    if sid not in connected_displays and hostname:
+        connected_displays[sid] = {
+            'hostname': hostname,
+            'ip': data.get('ip', request.remote_addr),
+            'current_page_id': None,
+            'current_url': None,
+            'paused': False,
+            'last_seen': datetime.now().isoformat()
+        }
+
+    if sid in connected_displays:
+        connected_displays[sid].update({
+            'temp_c': data.get('temp_c'),
+            'mem_total_mb': data.get('mem_total_mb'),
+            'mem_free_mb': data.get('mem_free_mb'),
+            'uptime_sec': data.get('uptime_sec'),
+            'wifi_rssi_dbm': data.get('wifi_rssi_dbm'),
+            'health_seen': datetime.now().isoformat()
+        })
+
+        socketio.emit('displays_updated', serialize_displays())
+
+
 @socketio.on('request_pages')
 def handle_request_pages(data=None):
     """Send pages list to kiosk."""

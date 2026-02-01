@@ -23,6 +23,7 @@ import requests
 import json
 import base64
 import websocket
+from datetime import datetime
 
 import socketio
 
@@ -226,6 +227,85 @@ def send_status():
         })
     except Exception as e:
         log(f'Error sending status: {e}')
+
+
+def get_cpu_temp_c():
+    """Return CPU temperature in Celsius (float) or None."""
+    try:
+        out = subprocess.check_output(['vcgencmd', 'measure_temp'], text=True).strip()
+        # temp=38.4'C
+        if out.startswith('temp='):
+            return float(out.split('=')[1].split("'")[0])
+    except Exception:
+        pass
+    try:
+        with open('/sys/class/thermal/thermal_zone0/temp', 'r') as f:
+            return float(f.read().strip()) / 1000.0
+    except Exception:
+        return None
+
+
+def get_mem_info_mb():
+    """Return (mem_total_mb, mem_free_mb) or (None, None)."""
+    try:
+        mem_total = None
+        mem_available = None
+        with open('/proc/meminfo', 'r') as f:
+            for line in f:
+                if line.startswith('MemTotal:'):
+                    mem_total = int(line.split()[1]) / 1024.0
+                elif line.startswith('MemAvailable:'):
+                    mem_available = int(line.split()[1]) / 1024.0
+        return mem_total, mem_available
+    except Exception:
+        return None, None
+
+
+def get_uptime_sec():
+    """Return uptime in seconds or None."""
+    try:
+        with open('/proc/uptime', 'r') as f:
+            return float(f.read().split()[0])
+    except Exception:
+        return None
+
+
+def get_wifi_rssi_dbm():
+    """Return Wi-Fi RSSI in dBm (int) or None."""
+    try:
+        out = subprocess.check_output(['iwconfig', 'wlan0'], text=True, stderr=subprocess.DEVNULL)
+        # Look for "Signal level=-55 dBm"
+        for part in out.split():
+            if part.startswith('level=') or part.startswith('level:-'):
+                val = part.split('=')[-1].replace('dBm', '')
+                return int(val)
+        if 'Signal level=' in out:
+            seg = out.split('Signal level=')[1].split()[0]
+            return int(seg.replace('dBm', ''))
+    except Exception:
+        return None
+    return None
+
+
+def send_health():
+    """Send health metrics to server."""
+    temp_c = get_cpu_temp_c()
+    mem_total, mem_free = get_mem_info_mb()
+    uptime = get_uptime_sec()
+    rssi = get_wifi_rssi_dbm()
+    try:
+        sio.emit('kiosk_health', {
+            'hostname': get_hostname(),
+            'ip': get_local_ip(),
+            'temp_c': temp_c,
+            'mem_total_mb': mem_total,
+            'mem_free_mb': mem_free,
+            'uptime_sec': uptime,
+            'wifi_rssi_dbm': rssi,
+            'last_seen': datetime.now().isoformat()
+        })
+    except Exception as e:
+        log(f'Error sending health: {e}')
 
 
 def clear_profile_locks():
@@ -673,6 +753,7 @@ def connect():
     log('Connected to server')
     sio.emit('kiosk_connect', {'hostname': get_hostname(), 'ip': get_local_ip()})
     refresh_pages()
+    send_health()
 
 
 @sio.event
@@ -1072,6 +1153,7 @@ def main():
 
     # Main loop - monitor browser
     last_crash = 0
+    last_health = 0
     while running:
         try:
             # Check if browser crashed
@@ -1093,6 +1175,10 @@ def main():
                 urls = get_enabled_urls()
                 launch_browser_with_tabs(urls)
 
+            now = time.time()
+            if now - last_health >= 10:
+                send_health()
+                last_health = now
             sio.sleep(2)
         except KeyboardInterrupt:
             break

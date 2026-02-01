@@ -213,6 +213,21 @@ section h2 {
     margin-bottom: 10px;
 }
 
+.display-health {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 10px;
+    margin-top: 6px;
+    font-size: 0.8rem;
+    color: var(--gray-500);
+}
+
+.health-metric {
+    background: var(--gray-100);
+    border-radius: 999px;
+    padding: 2px 8px;
+}
+
 .display-info div {
     margin-bottom: 4px;
 }

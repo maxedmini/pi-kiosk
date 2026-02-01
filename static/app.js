@@ -221,6 +221,11 @@ function renderDisplays() {
             ? `<a href="${escapeHtml(fallbackUrl)}" target="_blank" rel="noopener">Open</a>`
             : '';
 
+        const temp = display.temp_c != null ? `${display.temp_c.toFixed(1)}°C` : '—';
+        const memFree = display.mem_free_mb != null ? `${Math.round(display.mem_free_mb)} MB free` : '—';
+        const uptime = display.uptime_sec != null ? `${Math.floor(display.uptime_sec / 3600)}h` : '—';
+        const wifi = display.wifi_rssi_dbm != null ? `${display.wifi_rssi_dbm} dBm` : '—';
+
         return `
             <div class="display-card ${statusClass}">
                 <div class="display-header">
@@ -230,6 +235,12 @@ function renderDisplays() {
                 <div class="display-info">
                     <div>IP: ${escapeHtml(display.ip)}</div>
                     <div>Page: ${escapeHtml(pageName)} (${display.current_index + 1}/${display.total_pages || '?'})</div>
+                    <div class="display-health">
+                        <span class="health-metric">Temp ${temp}</span>
+                        <span class="health-metric">Mem ${memFree}</span>
+                        <span class="health-metric">Uptime ${uptime}</span>
+                        <span class="health-metric">Wi‑Fi ${wifi}</span>
+                    </div>
                 </div>
                 <div class="display-preview">
                     ${previewHtml}

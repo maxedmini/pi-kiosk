@@ -120,6 +120,7 @@ else
 Opens all URLs as browser tabs and uses Ctrl+Tab to rotate.
 Includes scheduling support and fallback to default image."""
 import argparse, os, shutil, signal, socket, subprocess, sys, threading, time
+from datetime import datetime
 import urllib.request
 import socketio
 
@@ -165,6 +166,67 @@ def send_status():
     page = get_current_page()
     try: sio.emit('kiosk_status', {'hostname': get_hostname(), 'ip': get_local_ip(), 'current_page_id': page['id'] if page else None, 'current_url': page['url'] if page else None, 'paused': paused, 'current_index': current_index, 'total_pages': len(pages)})
     except Exception as e: log(f'Error sending status: {e}')
+
+def get_cpu_temp_c():
+    try:
+        out = subprocess.check_output(['vcgencmd', 'measure_temp'], text=True).strip()
+        if out.startswith('temp='):
+            return float(out.split('=')[1].split(\"'\")[0])
+    except: pass
+    try:
+        with open('/sys/class/thermal/thermal_zone0/temp', 'r') as f:
+            return float(f.read().strip()) / 1000.0
+    except: return None
+
+def get_mem_info_mb():
+    try:
+        mem_total = None
+        mem_available = None
+        with open('/proc/meminfo', 'r') as f:
+            for line in f:
+                if line.startswith('MemTotal:'):
+                    mem_total = int(line.split()[1]) / 1024.0
+                elif line.startswith('MemAvailable:'):
+                    mem_available = int(line.split()[1]) / 1024.0
+        return mem_total, mem_available
+    except: return None, None
+
+def get_uptime_sec():
+    try:
+        with open('/proc/uptime', 'r') as f:
+            return float(f.read().split()[0])
+    except: return None
+
+def get_wifi_rssi_dbm():
+    try:
+        out = subprocess.check_output(['iwconfig', 'wlan0'], text=True, stderr=subprocess.DEVNULL)
+        for part in out.split():
+            if part.startswith('level=') or part.startswith('level:-'):
+                val = part.split('=')[-1].replace('dBm', '')
+                return int(val)
+        if 'Signal level=' in out:
+            seg = out.split('Signal level=')[1].split()[0]
+            return int(seg.replace('dBm', ''))
+    except: return None
+    return None
+
+def send_health():
+    temp_c = get_cpu_temp_c()
+    mem_total, mem_free = get_mem_info_mb()
+    uptime = get_uptime_sec()
+    rssi = get_wifi_rssi_dbm()
+    try:
+        sio.emit('kiosk_health', {
+            'hostname': get_hostname(),
+            'ip': get_local_ip(),
+            'temp_c': temp_c,
+            'mem_total_mb': mem_total,
+            'mem_free_mb': mem_free,
+            'uptime_sec': uptime,
+            'wifi_rssi_dbm': rssi,
+            'last_seen': datetime.now().isoformat()
+        })
+    except Exception as e: log(f'Error sending health: {e}')
 
 def clear_profile_locks():
     for name in ('SingletonLock', 'SingletonSocket', 'SingletonCookie'):
@@ -253,6 +315,7 @@ def switcher_thread():
     """Background thread that rotates tabs."""
     global current_index, page_switch_counts, browser_ready, sync_target_page_id, sync_at, reset_timer, sync_enabled, sync_server_time, sync_received_at
     log('Switcher started')
+    last_health = 0
     while running:
         if paused and browser_ready and sync_at is not None:
             if time.time() >= sync_at:
@@ -311,6 +374,7 @@ def connect():
     log('Connected')
     sio.emit('kiosk_connect', {'hostname': get_hostname(), 'ip': get_local_ip()})
     sio.emit('request_pages', {'hostname': get_hostname()})
+    send_health()
 
 @sio.event
 def disconnect(): log('Disconnected')
@@ -513,6 +577,10 @@ def main():
                 log('Browser crashed, relaunching...')
                 urls = get_enabled_urls()
                 launch_browser_with_tabs(urls)
+            now = time.time()
+            if now - last_health >= 10:
+                send_health()
+                last_health = now
             sio.sleep(2)
         except KeyboardInterrupt: break
         except Exception as e: log(f'Error: {e}'); time.sleep(5)
