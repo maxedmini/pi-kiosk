@@ -543,8 +543,8 @@ if [ -f /etc/argononed.conf ]; then
 #
 # Argon Fan Speed Configuration (CPU)
 #
-55=30
-60=55
+40=30
+55=55
 65=100
 EOF
     systemctl enable argononed >/dev/null 2>&1 || true
