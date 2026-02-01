@@ -467,6 +467,9 @@ def get_enabled_urls():
     for page in pages:
         if page.get('enabled', True):
             urls.append(build_url(page['url']))
+    # Fallback to default image if no pages available
+    if not urls:
+        urls = [f'{server_url}/static/default.png']
     return urls
 
 
@@ -556,22 +559,17 @@ def on_pages_list(data):
     log(f'Received {len(data)} pages')
     pages = data
 
+    # Reset to first tab
+    current_index = 0
+
+    # Get URLs and launch browser (get_enabled_urls handles fallback)
+    urls = get_enabled_urls()
+    launch_browser_with_tabs(urls)
+
     if pages:
-        # Reset to first tab
-        current_index = 0
-
-        # Get URLs and launch browser
-        urls = get_enabled_urls()
-        if urls:
-            launch_browser_with_tabs(urls)
-        else:
-            log('No enabled pages')
-            launch_browser_with_tabs(['about:blank'])
-
         send_status()
     else:
-        log('No pages configured')
-        launch_browser_with_tabs(['about:blank'])
+        log('No pages configured, showing default image')
 
 
 @sio.on('pages_updated')
@@ -938,10 +936,7 @@ def main():
                 last_crash = now
                 log('Relaunching browser...')
                 urls = get_enabled_urls()
-                if urls:
-                    launch_browser_with_tabs(urls)
-                else:
-                    launch_browser_with_tabs(['about:blank'])
+                launch_browser_with_tabs(urls)
 
             sio.sleep(2)
         except KeyboardInterrupt:

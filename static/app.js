@@ -212,6 +212,9 @@ function renderPages() {
         const displayBadge = page.display_id
             ? `<span class="page-display-badge" title="Assigned to ${escapeHtml(page.display_id)}">${escapeHtml(page.display_id)}</span>`
             : `<span class="page-display-badge all" title="Shows on all displays">All</span>`;
+        const scheduleBadge = page.schedule_enabled
+            ? `<span class="page-schedule-badge ${page.is_active ? 'active' : 'inactive'}" title="Scheduled: ${escapeHtml(page.schedule_start || '')} - ${escapeHtml(page.schedule_end || '')}">${page.schedule_start}-${page.schedule_end}</span>`
+            : '';
 
         return `
             <li class="page-item ${isCurrent ? 'current' : ''} ${!page.enabled ? 'disabled' : ''}" data-id="${page.id}">
@@ -222,6 +225,7 @@ function renderPages() {
                         ${escapeHtml(page.name || 'Unnamed')}
                         <span class="page-type-badge ${isImage ? 'image' : ''}">${isImage ? 'Image' : 'URL'}</span>
                         ${displayBadge}
+                        ${scheduleBadge}
                     </div>
                     <div class="page-url" title="${escapeHtml(page.url || '')}">${escapeHtml(page.url || '')}</div>
                 </div>
@@ -384,6 +388,19 @@ document.getElementById('editRefresh').addEventListener('change', (e) => {
     document.getElementById('editRefreshIntervalGroup').style.display = e.target.checked ? 'block' : 'none';
 });
 
+// Schedule checkbox toggle handlers
+document.getElementById('newScheduleEnabled').addEventListener('change', (e) => {
+    document.getElementById('newScheduleFields').style.display = e.target.checked ? 'flex' : 'none';
+});
+
+document.getElementById('imageScheduleEnabled').addEventListener('change', (e) => {
+    document.getElementById('imageScheduleFields').style.display = e.target.checked ? 'flex' : 'none';
+});
+
+document.getElementById('editScheduleEnabled').addEventListener('change', (e) => {
+    document.getElementById('editScheduleFields').style.display = e.target.checked ? 'flex' : 'none';
+});
+
 // Add page form
 addPageForm.addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -394,6 +411,9 @@ addPageForm.addEventListener('submit', async (e) => {
     const display_id = document.getElementById('newDisplayId').value || null;
     const refresh = document.getElementById('newRefresh').checked;
     const refresh_interval = parseInt(document.getElementById('newRefreshInterval').value) || 1;
+    const schedule_enabled = document.getElementById('newScheduleEnabled').checked;
+    const schedule_start = document.getElementById('newScheduleStart').value || null;
+    const schedule_end = document.getElementById('newScheduleEnd').value || null;
 
     if (!url) return;
 
@@ -401,7 +421,7 @@ addPageForm.addEventListener('submit', async (e) => {
         await fetch('/api/pages', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ url, name, duration, display_id, refresh, refresh_interval })
+            body: JSON.stringify({ url, name, duration, display_id, refresh, refresh_interval, schedule_enabled, schedule_start, schedule_end })
         });
 
         // Reset form
@@ -412,6 +432,8 @@ addPageForm.addEventListener('submit', async (e) => {
         document.getElementById('newRefresh').checked = false;
         document.getElementById('newRefreshInterval').value = '1';
         document.getElementById('newRefreshIntervalGroup').style.display = 'none';
+        document.getElementById('newScheduleEnabled').checked = false;
+        document.getElementById('newScheduleFields').style.display = 'none';
 
         loadPages();
     } catch (error) {
@@ -458,6 +480,9 @@ uploadImageForm.addEventListener('submit', async (e) => {
     formData.append('display_id', document.getElementById('imageDisplayId').value || '');
     formData.append('refresh', document.getElementById('imageRefresh').checked ? 'true' : 'false');
     formData.append('refresh_interval', document.getElementById('imageRefreshInterval').value || '1');
+    formData.append('schedule_enabled', document.getElementById('imageScheduleEnabled').checked ? 'true' : 'false');
+    formData.append('schedule_start', document.getElementById('imageScheduleStart').value || '');
+    formData.append('schedule_end', document.getElementById('imageScheduleEnd').value || '');
 
     try {
         const response = await fetch('/api/images', {
@@ -478,6 +503,8 @@ uploadImageForm.addEventListener('submit', async (e) => {
         document.getElementById('imageRefresh').checked = false;
         document.getElementById('imageRefreshInterval').value = '1';
         document.getElementById('imageRefreshIntervalGroup').style.display = 'none';
+        document.getElementById('imageScheduleEnabled').checked = false;
+        document.getElementById('imageScheduleFields').style.display = 'none';
         filePreview.innerHTML = '';
 
         loadPages();
@@ -502,6 +529,10 @@ function editPage(pageId) {
     document.getElementById('editRefresh').checked = page.refresh;
     document.getElementById('editRefreshInterval').value = page.refresh_interval || 1;
     document.getElementById('editRefreshIntervalGroup').style.display = page.refresh ? 'block' : 'none';
+    document.getElementById('editScheduleEnabled').checked = page.schedule_enabled;
+    document.getElementById('editScheduleStart').value = page.schedule_start || '09:00';
+    document.getElementById('editScheduleEnd').value = page.schedule_end || '17:00';
+    document.getElementById('editScheduleFields').style.display = page.schedule_enabled ? 'flex' : 'none';
 
     if (page.type === 'image') {
         editUrlEl.disabled = true;
@@ -546,7 +577,10 @@ editPageForm.addEventListener('submit', async (e) => {
         display_id: document.getElementById('editDisplayId').value || null,
         enabled: document.getElementById('editEnabled').checked,
         refresh: document.getElementById('editRefresh').checked,
-        refresh_interval: parseInt(document.getElementById('editRefreshInterval').value) || 1
+        refresh_interval: parseInt(document.getElementById('editRefreshInterval').value) || 1,
+        schedule_enabled: document.getElementById('editScheduleEnabled').checked,
+        schedule_start: document.getElementById('editScheduleStart').value || null,
+        schedule_end: document.getElementById('editScheduleEnd').value || null
     };
     if (!editUrlEl.disabled) {
         data.url = editUrlEl.value.trim();

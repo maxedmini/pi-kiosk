@@ -10,6 +10,8 @@ import socket
 import subprocess
 import sqlite3
 import uuid
+import threading
+import time
 from datetime import datetime
 import shutil
 import io
@@ -96,6 +98,12 @@ def init_db():
         conn.execute("ALTER TABLE pages ADD COLUMN refresh INTEGER DEFAULT 0")
     if 'refresh_interval' not in columns:
         conn.execute("ALTER TABLE pages ADD COLUMN refresh_interval INTEGER DEFAULT 1")
+    if 'schedule_enabled' not in columns:
+        conn.execute("ALTER TABLE pages ADD COLUMN schedule_enabled INTEGER DEFAULT 0")
+    if 'schedule_start' not in columns:
+        conn.execute("ALTER TABLE pages ADD COLUMN schedule_start TEXT")
+    if 'schedule_end' not in columns:
+        conn.execute("ALTER TABLE pages ADD COLUMN schedule_end TEXT")
 
     conn.commit()
     conn.close()
@@ -106,6 +114,48 @@ def dict_from_row(row):
     if row is None:
         return None
     return dict(row)
+
+
+def is_page_active_now(page):
+    """Check if a page should be displayed at the current time.
+
+    Args:
+        page: dict with schedule_enabled, schedule_start, schedule_end
+
+    Returns:
+        True if page should be shown, False otherwise
+    """
+    # No schedule = always show
+    if not page.get('schedule_enabled'):
+        return True
+
+    start_str = page.get('schedule_start')
+    end_str = page.get('schedule_end')
+
+    # If missing times, show always
+    if not start_str or not end_str:
+        return True
+
+    try:
+        now = datetime.now()
+        current_minutes = now.hour * 60 + now.minute
+
+        start_parts = start_str.split(':')
+        start_minutes = int(start_parts[0]) * 60 + int(start_parts[1])
+
+        end_parts = end_str.split(':')
+        end_minutes = int(end_parts[0]) * 60 + int(end_parts[1])
+
+        # Normal case: start before end (e.g., 09:00 - 17:00)
+        if start_minutes <= end_minutes:
+            return start_minutes <= current_minutes < end_minutes
+        # Overnight case: end before start (e.g., 23:00 - 06:00)
+        else:
+            return current_minutes >= start_minutes or current_minutes < end_minutes
+
+    except (ValueError, AttributeError):
+        # On parse error, show the page
+        return True
 
 
 def allowed_file(filename):
@@ -290,6 +340,8 @@ def get_pages():
         if page_dict['type'] == 'image' and page_dict['filename']:
             page_dict['url'] = f"/view/image/{page_dict['filename']}"
             page_dict['thumbnail'] = f"/uploads/{page_dict['filename']}"
+        # Add is_active field for UI display
+        page_dict['is_active'] = is_page_active_now(page_dict)
         result.append(page_dict)
 
     return jsonify(result)
@@ -310,7 +362,7 @@ def add_page():
     next_pos = (max_pos or 0) + 1
 
     cursor = conn.execute(
-        'INSERT INTO pages (url, name, duration, position, enabled, type, display_id, refresh, refresh_interval) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        'INSERT INTO pages (url, name, duration, position, enabled, type, display_id, refresh, refresh_interval, schedule_enabled, schedule_start, schedule_end) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
         (
             data['url'],
             data.get('name', ''),
@@ -320,7 +372,10 @@ def add_page():
             'url',
             data.get('display_id', None),
             1 if data.get('refresh', False) else 0,
-            data.get('refresh_interval', 1)
+            data.get('refresh_interval', 1),
+            1 if data.get('schedule_enabled', False) else 0,
+            data.get('schedule_start'),
+            data.get('schedule_end')
         )
     )
     conn.commit()
@@ -390,6 +445,15 @@ def update_page(page_id):
     if 'refresh_interval' in data:
         updates.append('refresh_interval = ?')
         values.append(max(1, int(data['refresh_interval'])))
+    if 'schedule_enabled' in data:
+        updates.append('schedule_enabled = ?')
+        values.append(1 if data['schedule_enabled'] else 0)
+    if 'schedule_start' in data:
+        updates.append('schedule_start = ?')
+        values.append(data['schedule_start'])
+    if 'schedule_end' in data:
+        updates.append('schedule_end = ?')
+        values.append(data['schedule_end'])
 
     if updates:
         values.append(page_id)
@@ -491,12 +555,20 @@ def get_page_urls():
     durations = []
     for p in pages:
         page = dict_from_row(p)
+        # Skip pages not active at current time
+        if not is_page_active_now(page):
+            continue
         if page['type'] == 'image' and page['filename']:
             # For images, use the viewer URL
             urls.append(f"/view/image/{page['filename']}")
         else:
             urls.append(page['url'])
         durations.append(page.get('duration', 30))
+
+    # Fallback to default image if no pages available
+    if not urls:
+        urls = ['/static/default.png']
+        durations = [30]
 
     return jsonify({
         'urls': urls,
@@ -536,6 +608,9 @@ def upload_image():
         display_id = None
     refresh = request.form.get('refresh', '').lower() in ('true', '1', 'yes', 'on')
     refresh_interval = int(request.form.get('refresh_interval', 1) or 1)
+    schedule_enabled = request.form.get('schedule_enabled', '').lower() in ('true', '1', 'yes', 'on')
+    schedule_start = request.form.get('schedule_start') or None
+    schedule_end = request.form.get('schedule_end') or None
 
     # Add to database
     conn = get_db()
@@ -544,7 +619,7 @@ def upload_image():
         next_pos = (max_pos or 0) + 1
 
         cursor = conn.execute(
-            'INSERT INTO pages (url, name, duration, position, enabled, type, filename, display_id, refresh, refresh_interval) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+            'INSERT INTO pages (url, name, duration, position, enabled, type, filename, display_id, refresh, refresh_interval, schedule_enabled, schedule_start, schedule_end) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
             (
                 f"/view/image/{filename}",
                 name,
@@ -555,7 +630,10 @@ def upload_image():
                 filename,
                 display_id,
                 1 if refresh else 0,
-                max(1, refresh_interval)
+                max(1, refresh_interval),
+                1 if schedule_enabled else 0,
+                schedule_start,
+                schedule_end
             )
         )
 
@@ -964,16 +1042,64 @@ def handle_request_pages(data=None):
     result = []
     for p in pages:
         page_dict = dict_from_row(p)
+        # Skip pages not active at current time
+        if not is_page_active_now(page_dict):
+            continue
         # For images, ensure we use the viewer URL
         if page_dict['type'] == 'image' and page_dict['filename']:
             page_dict['url'] = f"/view/image/{page_dict['filename']}"
         result.append(page_dict)
 
+    # Fallback to default image if no pages available
+    if not result:
+        result = [{
+            'id': 0,
+            'url': '/static/default.png',
+            'name': 'Default',
+            'duration': 30,
+            'type': 'image',
+            'enabled': 1
+        }]
+
     emit('pages_list', result)
+
+
+def schedule_checker_thread():
+    """Background thread that checks for schedule transitions every minute."""
+    last_active_pages = set()
+
+    while True:
+        try:
+            conn = get_db()
+            pages = conn.execute(
+                'SELECT id, schedule_enabled, schedule_start, schedule_end FROM pages WHERE enabled = 1'
+            ).fetchall()
+            conn.close()
+
+            current_active = set()
+            for p in pages:
+                page = dict_from_row(p)
+                if is_page_active_now(page):
+                    current_active.add(page['id'])
+
+            # If active pages changed, notify all kiosks
+            if current_active != last_active_pages:
+                socketio.emit('pages_updated', {'action': 'schedule_change'})
+                last_active_pages = current_active
+
+        except Exception as e:
+            print(f'Schedule checker error: {e}')
+
+        time.sleep(60)  # Check every minute
 
 
 if __name__ == '__main__':
     init_db()
+
+    # Start background schedule checker
+    schedule_thread = threading.Thread(target=schedule_checker_thread, daemon=True)
+    schedule_thread.start()
+
     print(f'Starting Pi Kiosk Server on http://{HOST}:{PORT}')
     print(f'Hostname: {get_hostname()}')
     print(f'Local IP: {get_local_ip()}')

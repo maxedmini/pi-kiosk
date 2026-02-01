@@ -119,6 +119,18 @@
                         <label for="newRefreshInterval">Every N switches</label>
                         <input type="number" id="newRefreshInterval" value="1" min="1" max="100">
                     </div>
+                    <div class="form-group checkbox-group">
+                        <label title="Only show during specific hours">
+                            <input type="checkbox" id="newScheduleEnabled"> Time Schedule
+                        </label>
+                    </div>
+                    <div class="form-group schedule-fields" id="newScheduleFields" style="display:none;">
+                        <div class="schedule-row">
+                            <input type="time" id="newScheduleStart" value="09:00" title="Start time">
+                            <span>to</span>
+                            <input type="time" id="newScheduleEnd" value="17:00" title="End time">
+                        </div>
+                    </div>
                     <button type="submit" class="btn btn-success">Add Page</button>
                 </div>
             </form>
@@ -153,6 +165,18 @@
                     <div class="form-group small refresh-interval-group" id="imageRefreshIntervalGroup" style="display:none;">
                         <label for="imageRefreshInterval">Every N switches</label>
                         <input type="number" id="imageRefreshInterval" value="1" min="1" max="100">
+                    </div>
+                    <div class="form-group checkbox-group">
+                        <label title="Only show during specific hours">
+                            <input type="checkbox" id="imageScheduleEnabled"> Time Schedule
+                        </label>
+                    </div>
+                    <div class="form-group schedule-fields" id="imageScheduleFields" style="display:none;">
+                        <div class="schedule-row">
+                            <input type="time" id="imageScheduleStart" value="09:00" title="Start time">
+                            <span>to</span>
+                            <input type="time" id="imageScheduleEnd" value="17:00" title="End time">
+                        </div>
                     </div>
                     <button type="submit" class="btn btn-success">Upload Image</button>
                 </div>
@@ -209,6 +233,19 @@
                 <div class="form-group refresh-interval-group" id="editRefreshIntervalGroup" style="display:none;">
                     <label for="editRefreshInterval">Refresh every N switches</label>
                     <input type="number" id="editRefreshInterval" value="1" min="1" max="100">
+                </div>
+                <div class="form-group">
+                    <label>
+                        <input type="checkbox" id="editScheduleEnabled"> Time Schedule
+                    </label>
+                </div>
+                <div class="form-group schedule-fields" id="editScheduleFields" style="display:none;">
+                    <div class="schedule-row">
+                        <input type="time" id="editScheduleStart" value="09:00">
+                        <span>to</span>
+                        <input type="time" id="editScheduleEnd" value="17:00">
+                    </div>
+                    <small class="schedule-help">For overnight schedules (e.g., 11pm-6am), set start after end.</small>
                 </div>
                 <div class="modal-actions">
                     <button type="button" class="btn btn-secondary" id="cancelEdit">Cancel</button>
