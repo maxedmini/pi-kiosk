@@ -139,6 +139,7 @@ current_index = 0
 browser_ready = False
 sync_target_page_id = None
 sync_at = None
+reset_timer = False
 paused = False
 running = True
 server_url = DEFAULT_SERVER_URL
@@ -247,7 +248,7 @@ def get_enabled_urls():
 
 def switcher_thread():
     """Background thread that rotates tabs."""
-    global current_index, page_switch_counts, browser_ready, sync_target_page_id, sync_at
+    global current_index, page_switch_counts, browser_ready, sync_target_page_id, sync_at, reset_timer
     log('Switcher started')
     while running:
         if paused and browser_ready and sync_at is not None:
@@ -265,11 +266,18 @@ def switcher_thread():
         duration = page.get('duration', 30)
         log(f"Starting page: id={page.get('id')} name={page.get('name', '')} duration={duration}s index={current_index}")
         start = time.monotonic()
+        break_for_reset = False
         while running and not paused:
+            if reset_timer:
+                reset_timer = False
+                break_for_reset = True
+                break
             elapsed = time.monotonic() - start
             if elapsed >= duration:
                 break
             time.sleep(min(0.1, duration - elapsed))
+        if break_for_reset:
+            continue
         log(f"Completed page: id={page.get('id')} elapsed={elapsed:.2f}s target={duration}s")
         if running and not paused and pages:
             send_keystroke('ctrl+Tab')
@@ -327,7 +335,7 @@ def on_sync(data):
     log(f'Sync scheduled at {sync_at} for page {sync_target_page_id}')
 
 def goto_page_id(page_id):
-    global current_index
+    global current_index, reset_timer
     if not pages: return
     try: page_id = int(page_id)
     except: return
@@ -338,24 +346,26 @@ def goto_page_id(page_id):
     if 1 <= idx+1 <= 9:
         send_keystroke(f'ctrl+{idx+1}')
         current_index = idx
+        reset_timer = True
         send_status()
         return
     while current_index != idx:
         send_keystroke('ctrl+Tab')
         current_index = (current_index + 1) % len(pages)
         time.sleep(0.2)
+    reset_timer = True
     send_status()
 
 @sio.on('control')
 def on_control(data):
-    global paused, current_index
+    global paused, current_index, reset_timer
     action = data.get('action')
     log(f'Control: {action}')
     if action == 'pause': paused = True; send_status()
     elif action == 'resume': paused = False; send_status()
-    elif action == 'next': send_keystroke('ctrl+Tab'); current_index = (current_index + 1) % len(pages) if pages else 0; send_status()
-    elif action == 'prev': send_keystroke('ctrl+shift+Tab'); current_index = (current_index - 1) % len(pages) if pages else 0; send_status()
-    elif action == 'refresh': send_keystroke('ctrl+r')
+    elif action == 'next': send_keystroke('ctrl+Tab'); current_index = (current_index + 1) % len(pages) if pages else 0; reset_timer = True; send_status()
+    elif action == 'prev': send_keystroke('ctrl+shift+Tab'); current_index = (current_index - 1) % len(pages) if pages else 0; reset_timer = True; send_status()
+    elif action == 'refresh': send_keystroke('ctrl+r'); reset_timer = True
     elif action == 'goto':
         page_id = data.get('page_id')
         if page_id:

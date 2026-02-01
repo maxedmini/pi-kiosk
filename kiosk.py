@@ -54,6 +54,7 @@ current_index = 0
 browser_ready = False
 sync_target_page_id = None
 sync_at = None
+reset_timer = False
 paused = False
 running = True
 server_url = DEFAULT_SERVER_URL
@@ -490,7 +491,7 @@ def get_enabled_urls():
 
 def switcher_thread():
     """Background thread that rotates through tabs."""
-    global current_index, running, paused, page_switch_counts, browser_ready, sync_target_page_id, sync_at
+    global current_index, running, paused, page_switch_counts, browser_ready, sync_target_page_id, sync_at, reset_timer
 
     log('Switcher thread started')
 
@@ -520,11 +521,18 @@ def switcher_thread():
 
         # Wait for duration using a monotonic clock (avoids drift/early exits)
         start = time.monotonic()
+        break_for_reset = False
         while running and not paused:
+            if reset_timer:
+                reset_timer = False
+                break_for_reset = True
+                break
             elapsed = time.monotonic() - start
             if elapsed >= duration:
                 break
             time.sleep(min(0.1, duration - elapsed))
+        if break_for_reset:
+            continue
         log(f"Completed page: id={page.get('id')} elapsed={elapsed:.2f}s target={duration}s")
 
         # If still running and not paused, switch to next tab
@@ -566,7 +574,7 @@ def refresh_pages():
 
 def goto_page_id(page_id):
     """Switch to a specific page by id."""
-    global current_index
+    global current_index, reset_timer
     if not pages:
         return
     try:
@@ -584,6 +592,7 @@ def goto_page_id(page_id):
     if 1 <= tab_num <= 9:
         send_keystroke(f'ctrl+{tab_num}')
         current_index = idx
+        reset_timer = True
         send_status()
         schedule_screenshot()
         return
@@ -592,6 +601,7 @@ def goto_page_id(page_id):
         send_keystroke('ctrl+Tab')
         current_index = (current_index + 1) % len(pages)
         time.sleep(0.2)
+    reset_timer = True
     send_status()
     schedule_screenshot()
 
@@ -660,7 +670,7 @@ def on_sync(data):
 @sio.on('control')
 def on_control(data):
     """Handle control commands from server."""
-    global paused, current_index
+    global paused, current_index, reset_timer
 
     action = data.get('action')
     log(f'Control: {action}')
@@ -676,17 +686,20 @@ def on_control(data):
     elif action == 'next':
         send_keystroke('ctrl+Tab')
         current_index = (current_index + 1) % len(pages) if pages else 0
+        reset_timer = True
         send_status()
         schedule_screenshot()
 
     elif action == 'prev':
         send_keystroke('ctrl+shift+Tab')
         current_index = (current_index - 1) % len(pages) if pages else 0
+        reset_timer = True
         send_status()
         schedule_screenshot()
 
     elif action == 'refresh':
         send_keystroke('ctrl+r')
+        reset_timer = True
         schedule_screenshot()
 
     elif action == 'goto':
