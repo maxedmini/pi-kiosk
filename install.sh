@@ -247,9 +247,12 @@ def switcher_thread():
         page = get_current_page()
         if not page: time.sleep(1); continue
         duration = page.get('duration', 30)
-        waited = 0
-        while waited < duration and running and not paused:
-            time.sleep(0.1); waited += 0.1
+        start = time.monotonic()
+        while running and not paused:
+            elapsed = time.monotonic() - start
+            if elapsed >= duration:
+                break
+            time.sleep(min(0.1, duration - elapsed))
         if running and not paused and pages:
             send_keystroke('ctrl+Tab')
             current_index = (current_index + 1) % len(pages)

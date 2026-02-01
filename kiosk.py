@@ -493,11 +493,13 @@ def switcher_thread():
 
         duration = page.get('duration', 30)
 
-        # Wait for duration (checking flags every 100ms)
-        waited = 0
-        while waited < duration and running and not paused:
-            time.sleep(0.1)
-            waited += 0.1
+        # Wait for duration using a monotonic clock (avoids drift/early exits)
+        start = time.monotonic()
+        while running and not paused:
+            elapsed = time.monotonic() - start
+            if elapsed >= duration:
+                break
+            time.sleep(min(0.1, duration - elapsed))
 
         # If still running and not paused, switch to next tab
         if running and not paused and pages:
