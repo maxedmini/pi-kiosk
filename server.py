@@ -1110,6 +1110,7 @@ def handle_kiosk_status(data):
             'paused': data.get('paused', False),
             'current_index': data.get('current_index'),
             'total_pages': data.get('total_pages'),
+            'safe_mode': data.get('safe_mode', False),
             'last_seen': datetime.now().isoformat()
         })
 

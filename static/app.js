@@ -203,7 +203,8 @@ function renderDisplays() {
     displaysList.innerHTML = displays.map(display => {
         const page = pages.find(p => p.id === display.current_page_id);
         const pageName = page?.name || 'Unknown';
-        const statusClass = display.paused ? 'paused' : 'online';
+        const isSafe = !!display.safe_mode;
+        const statusClass = isSafe ? 'safe' : (display.paused ? 'paused' : 'online');
         const screenshotUrl = display.screenshot_url
             ? `${absoluteUrl(display.screenshot_url)}?t=${Date.now()}`
             : '';
@@ -230,7 +231,7 @@ function renderDisplays() {
             <div class="display-card ${statusClass}">
                 <div class="display-header">
                     <span class="display-name">${escapeHtml(display.hostname)}</span>
-                    <span class="display-status ${statusClass}">${display.paused ? 'Paused' : 'Playing'}</span>
+                    <span class="display-status ${statusClass}">${isSafe ? 'Safe' : (display.paused ? 'Paused' : 'Playing')}</span>
                 </div>
                 <div class="display-info">
                     <div>IP: ${escapeHtml(display.ip)}</div>

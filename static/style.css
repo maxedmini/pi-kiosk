@@ -12,6 +12,7 @@
     --danger: #ef4444;
     --danger-dark: #dc2626;
     --warning: #f59e0b;
+    --safe: #f97316;
     --gray-50: #f9fafb;
     --gray-100: #f3f4f6;
     --gray-200: #e5e7eb;
@@ -180,6 +181,10 @@ section h2 {
     border-color: var(--warning);
 }
 
+.display-card.safe {
+    border-color: var(--safe);
+}
+
 .display-header {
     display: flex;
     justify-content: space-between;
@@ -205,6 +210,10 @@ section h2 {
 
 .display-status.paused {
     background: var(--warning);
+}
+
+.display-status.safe {
+    background: var(--safe);
 }
 
 .display-info {

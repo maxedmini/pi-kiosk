@@ -59,6 +59,8 @@ reset_timer = False
 sync_enabled = True
 sync_server_time = None
 sync_received_at = None
+safe_mode_until = 0
+crash_times = []
 paused = False
 running = True
 server_url = DEFAULT_SERVER_URL
@@ -223,7 +225,8 @@ def send_status():
             'current_url': page['url'] if page else None,
             'paused': paused,
             'current_index': current_index,
-            'total_pages': len(pages)
+            'total_pages': len(pages),
+            'safe_mode': time.time() < safe_mode_until
         })
     except Exception as e:
         log(f'Error sending status: {e}')
@@ -574,11 +577,14 @@ def get_enabled_urls():
 
 def switcher_thread():
     """Background thread that rotates through tabs."""
-    global current_index, running, paused, page_switch_counts, browser_ready, sync_target_page_id, sync_at, reset_timer, sync_enabled, sync_server_time, sync_received_at
+    global current_index, running, paused, page_switch_counts, browser_ready, sync_target_page_id, sync_at, reset_timer, sync_enabled, sync_server_time, sync_received_at, safe_mode_until
 
     log('Switcher thread started')
 
     while running:
+        if time.time() < safe_mode_until:
+            time.sleep(1)
+            continue
         # If a sync is scheduled, wait for the target time and align
         if paused and browser_ready and sync_at is not None:
             if time.time() >= sync_at:
@@ -1103,7 +1109,7 @@ def signal_handler(sig, frame):
 
 
 def main():
-    global running, server_url, DISPLAY
+    global running, server_url, DISPLAY, safe_mode_until, crash_times
 
     parser = argparse.ArgumentParser(description='Pi Kiosk Display (Tab-Based)')
     parser.add_argument('--server', '-s', default=DEFAULT_SERVER_URL, help='Server URL')
@@ -1159,6 +1165,10 @@ def main():
             # Check if browser crashed
             if browser_process and browser_process.poll() is not None:
                 now = time.time()
+                crash_times.append(now)
+                # keep last 5 minutes
+                while crash_times and now - crash_times[0] > 300:
+                    crash_times.pop(0)
 
                 # Get diagnostic info about why browser exited
                 exit_info = get_browser_exit_info()
@@ -1167,13 +1177,23 @@ def main():
                     log(f'  {info}')
                 log('--------------------------------')
 
-                if now - last_crash < 10:
-                    log('Browser crashed too fast, waiting 10s before relaunch...')
-                    time.sleep(10)
-                last_crash = now
-                log('Relaunching browser...')
-                urls = get_enabled_urls()
-                launch_browser_with_tabs(urls)
+                if len(crash_times) >= 3:
+                    log('Entering safe mode due to repeated crashes...')
+                    safe_mode_until = now + 300
+                    crash_times.clear()
+                    urls = [f'{server_url}/static/default.png']
+                    launch_browser_with_tabs(urls)
+                else:
+                    if now - last_crash < 10:
+                        log('Browser crashed too fast, waiting 10s before relaunch...')
+                        time.sleep(10)
+                    last_crash = now
+                    if now < safe_mode_until:
+                        urls = [f'{server_url}/static/default.png']
+                    else:
+                        log('Relaunching browser...')
+                        urls = get_enabled_urls()
+                    launch_browser_with_tabs(urls)
 
             now = time.time()
             if now - last_health >= 10:
