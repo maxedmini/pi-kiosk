@@ -136,7 +136,21 @@
                                 <button type="button" class="btn btn-small btn-secondary remove-schedule" title="Remove time">×</button>
                             </div>
                         </div>
-                        <button type="button" class="btn btn-small btn-secondary add-schedule" data-target="newScheduleRows">Add time</button>
+                        <div class="schedule-actions">
+                            <button type="button" class="btn btn-small btn-secondary add-schedule" data-target="newScheduleRows">Add time</button>
+                            <button type="button" class="btn btn-small btn-secondary schedule-copy" data-target="newScheduleRows" title="Copy schedule times">Copy times</button>
+                            <button type="button" class="btn btn-small btn-secondary schedule-paste" data-target="newScheduleRows" title="Paste schedule times">Paste times</button>
+                        </div>
+                        <div class="schedule-timeline" data-source="newScheduleRows">
+                            <div class="schedule-timeline-track"></div>
+                            <div class="schedule-timeline-labels">
+                                <span>00</span>
+                                <span>06</span>
+                                <span>12</span>
+                                <span>18</span>
+                                <span>24</span>
+                            </div>
+                        </div>
                     </div>
                     <button type="submit" class="btn btn-success">Add Page</button>
                 </div>
@@ -187,7 +201,21 @@
                                 <button type="button" class="btn btn-small btn-secondary remove-schedule" title="Remove time">×</button>
                             </div>
                         </div>
-                        <button type="button" class="btn btn-small btn-secondary add-schedule" data-target="imageScheduleRows">Add time</button>
+                        <div class="schedule-actions">
+                            <button type="button" class="btn btn-small btn-secondary add-schedule" data-target="imageScheduleRows">Add time</button>
+                            <button type="button" class="btn btn-small btn-secondary schedule-copy" data-target="imageScheduleRows" title="Copy schedule times">Copy times</button>
+                            <button type="button" class="btn btn-small btn-secondary schedule-paste" data-target="imageScheduleRows" title="Paste schedule times">Paste times</button>
+                        </div>
+                        <div class="schedule-timeline" data-source="imageScheduleRows">
+                            <div class="schedule-timeline-track"></div>
+                            <div class="schedule-timeline-labels">
+                                <span>00</span>
+                                <span>06</span>
+                                <span>12</span>
+                                <span>18</span>
+                                <span>24</span>
+                            </div>
+                        </div>
                     </div>
                     <button type="submit" class="btn btn-success">Upload Image</button>
                 </div>
@@ -259,7 +287,21 @@
                             <button type="button" class="btn btn-small btn-secondary remove-schedule" title="Remove time">×</button>
                         </div>
                     </div>
-                    <button type="button" class="btn btn-small btn-secondary add-schedule" data-target="editScheduleRows">Add time</button>
+                    <div class="schedule-actions">
+                        <button type="button" class="btn btn-small btn-secondary add-schedule" data-target="editScheduleRows">Add time</button>
+                        <button type="button" class="btn btn-small btn-secondary schedule-copy" data-target="editScheduleRows" title="Copy schedule times">Copy times</button>
+                        <button type="button" class="btn btn-small btn-secondary schedule-paste" data-target="editScheduleRows" title="Paste schedule times">Paste times</button>
+                    </div>
+                    <div class="schedule-timeline" data-source="editScheduleRows">
+                        <div class="schedule-timeline-track"></div>
+                        <div class="schedule-timeline-labels">
+                            <span>00</span>
+                            <span>06</span>
+                            <span>12</span>
+                            <span>18</span>
+                            <span>24</span>
+                        </div>
+                    </div>
                     <small class="schedule-help">For overnight schedules (e.g., 11pm-6am), set start after end.</small>
                 </div>
                 <div class="modal-actions">

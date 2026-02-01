@@ -5,6 +5,7 @@ let pages = [];
 let displays = [];
 let systemInfo = { hostname: '', ip: '' };
 let sortable = null;
+let scheduleClipboard = [];
 
 // DOM Elements
 const systemHostname = document.getElementById('systemHostname');
@@ -130,6 +131,7 @@ function setScheduleRows(containerId, ranges) {
     container.innerHTML = '';
     const list = ranges && ranges.length ? ranges : [{ start: '09:00', end: '17:00' }];
     list.forEach(r => addScheduleRow(container, r.start, r.end));
+    updateScheduleTimeline(containerId);
 }
 
 function collectScheduleRanges(containerId) {
@@ -143,11 +145,79 @@ function collectScheduleRanges(containerId) {
     }).filter(Boolean);
 }
 
+function timeToMinutes(value) {
+    if (!value || !value.includes(':')) return null;
+    const [h, m] = value.split(':').map(Number);
+    if (Number.isNaN(h) || Number.isNaN(m)) return null;
+    return (h * 60) + m;
+}
+
+function rangesToSegments(ranges) {
+    const segments = [];
+    ranges.forEach(r => {
+        const start = timeToMinutes(r.start);
+        const end = timeToMinutes(r.end);
+        if (start === null || end === null) return;
+        if (start === end) {
+            segments.push({ start: 0, end: 1440 });
+            return;
+        }
+        if (start < end) {
+            segments.push({ start, end });
+        } else {
+            segments.push({ start, end: 1440 });
+            segments.push({ start: 0, end });
+        }
+    });
+    return segments.sort((a, b) => a.start - b.start);
+}
+
+function updateScheduleTimeline(containerId) {
+    const timeline = document.querySelector(`.schedule-timeline[data-source="${containerId}"]`);
+    if (!timeline) return;
+    const track = timeline.querySelector('.schedule-timeline-track');
+    if (!track) return;
+    track.innerHTML = '';
+    const ranges = collectScheduleRanges(containerId);
+    const segments = rangesToSegments(ranges);
+    segments.forEach(seg => {
+        const width = Math.max(0, seg.end - seg.start);
+        if (!width) return;
+        const bar = document.createElement('div');
+        bar.className = 'schedule-segment';
+        bar.style.left = `${(seg.start / 1440) * 100}%`;
+        bar.style.width = `${(width / 1440) * 100}%`;
+        track.appendChild(bar);
+    });
+}
+
+function parseScheduleText(text) {
+    if (!text) return [];
+    const trimmed = text.trim();
+    if (!trimmed) return [];
+    try {
+        const parsed = JSON.parse(trimmed);
+        if (Array.isArray(parsed)) {
+            return parsed.filter(r => r && r.start && r.end);
+        }
+    } catch (_) {
+        // fallthrough
+    }
+    const ranges = [];
+    const regex = /(\d{1,2}:\d{2})\s*-\s*(\d{1,2}:\d{2})/g;
+    let match;
+    while ((match = regex.exec(trimmed)) !== null) {
+        ranges.push({ start: match[1], end: match[2] });
+    }
+    return ranges;
+}
+
 document.addEventListener('click', (e) => {
     const addBtn = e.target.closest('.add-schedule');
     if (addBtn) {
         const targetId = addBtn.getAttribute('data-target');
         addScheduleRow(document.getElementById(targetId), '09:00', '17:00');
+        updateScheduleTimeline(targetId);
         return;
     }
     const removeBtn = e.target.closest('.remove-schedule');
@@ -159,7 +229,47 @@ document.addEventListener('click', (e) => {
             if (!container.children.length) {
                 addScheduleRow(container, '09:00', '17:00');
             }
+            if (container?.id) {
+                updateScheduleTimeline(container.id);
+            }
         }
+    }
+    const copyBtn = e.target.closest('.schedule-copy');
+    if (copyBtn) {
+        const targetId = copyBtn.getAttribute('data-target');
+        const ranges = collectScheduleRanges(targetId);
+        scheduleClipboard = ranges;
+        const text = ranges.map(r => `${r.start}-${r.end}`).join(', ');
+        if (navigator.clipboard?.writeText) {
+            navigator.clipboard.writeText(text).catch(() => {});
+        }
+        return;
+    }
+    const pasteBtn = e.target.closest('.schedule-paste');
+    if (pasteBtn) {
+        const targetId = pasteBtn.getAttribute('data-target');
+        const applyRanges = (ranges) => {
+            if (!ranges || !ranges.length) return;
+            setScheduleRows(targetId, ranges);
+            updateScheduleTimeline(targetId);
+        };
+        if (navigator.clipboard?.readText) {
+            navigator.clipboard.readText()
+                .then(text => {
+                    const ranges = parseScheduleText(text);
+                    applyRanges(ranges.length ? ranges : scheduleClipboard);
+                })
+                .catch(() => applyRanges(scheduleClipboard));
+        } else {
+            applyRanges(scheduleClipboard);
+        }
+    }
+});
+
+document.addEventListener('input', (e) => {
+    if (e.target.classList.contains('schedule-start') || e.target.classList.contains('schedule-end')) {
+        const container = e.target.closest('.schedule-rows');
+        if (container?.id) updateScheduleTimeline(container.id);
     }
 });
 

@@ -850,6 +850,12 @@ section h2 {
     gap: 6px;
 }
 
+.schedule-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
 .schedule-row {
     display: flex;
     align-items: center;
@@ -874,6 +880,37 @@ section h2 {
     color: var(--gray-500);
     display: block;
     margin-top: 4px;
+}
+
+.schedule-timeline {
+    flex: 1 1 240px;
+    min-width: 220px;
+}
+
+.schedule-timeline-track {
+    position: relative;
+    height: 18px;
+    border-radius: 10px;
+    background: linear-gradient(90deg, #e5e7eb 0%, #f3f4f6 100%);
+    border: 1px solid var(--gray-300);
+    overflow: hidden;
+}
+
+.schedule-segment {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    background: linear-gradient(90deg, #38bdf8 0%, #22c55e 100%);
+    border-radius: 10px;
+}
+
+.schedule-timeline-labels {
+    display: flex;
+    justify-content: space-between;
+    font-size: 0.675rem;
+    color: var(--gray-500);
+    margin-top: 4px;
+    padding: 0 2px;
 }
 
 /* Schedule badge on page list */
