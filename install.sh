@@ -179,6 +179,7 @@ def send_keystroke(keys):
     env = {**os.environ, 'DISPLAY': DISPLAY}
     if shutil.which('xdotool'):
         try:
+            subprocess.run(['xdotool', 'search', '--name', 'Chromium', 'windowactivate', '--sync'], env=env, capture_output=True, timeout=2)
             r = subprocess.run(['xdotool', 'key', '--clearmodifiers', keys], env=env, capture_output=True, timeout=2)
             if r.returncode == 0: log(f'Sent: {keys}'); return True
         except: pass
@@ -203,7 +204,7 @@ def send_keystroke(keys):
 
 def launch_browser_with_tabs(urls):
     """Launch Chromium with all URLs as tabs."""
-    global browser_process
+    global browser_process, current_index
     if not urls: urls = [f'{server_url}/static/default.png']
     log(f'Launching browser with {len(urls)} tabs')
     kill_browser()
@@ -221,6 +222,8 @@ def launch_browser_with_tabs(urls):
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
         log(f'Browser PID: {browser_process.pid}')
         time.sleep(3)
+        send_keystroke('ctrl+1')
+        current_index = 0
         return True
     except Exception as e:
         log(f'Error: {e}')

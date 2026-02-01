@@ -262,6 +262,13 @@ def send_keystroke(keys):
     # Try xdotool first (X11 - most common on Pi)
     if shutil.which('xdotool'):
         try:
+            # Ensure Chromium has focus before sending keys
+            subprocess.run(
+                ['xdotool', 'search', '--name', 'Chromium', 'windowactivate', '--sync'],
+                env=env,
+                capture_output=True,
+                timeout=2
+            )
             result = subprocess.run(
                 ['xdotool', 'key', '--clearmodifiers', keys],
                 env=env,
@@ -323,7 +330,7 @@ def launch_browser_with_tabs(urls):
     Args:
         urls: List of URLs to open as tabs
     """
-    global browser_process
+    global browser_process, current_index
 
     if not urls:
         log('No URLs to display')
@@ -392,6 +399,9 @@ def launch_browser_with_tabs(urls):
         log(f'Browser launched with PID: {browser_process.pid}')
         log(f'Browser log: {browser_log_path}')
         time.sleep(3)  # Wait for tabs to load
+        # Chromium focuses the last opened tab; force first tab to align timing
+        send_keystroke('ctrl+1')
+        current_index = 0
         return True
     except Exception as e:
         log(f'Error launching browser: {e}')
