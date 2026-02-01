@@ -495,6 +495,46 @@ section h2 {
 }
 
 /* Pages List */
+.bulk-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px 14px;
+    padding: 10px 12px;
+    margin: 10px 0 14px;
+    background: #f8fafc;
+    border: 1px solid var(--gray-200);
+    border-radius: var(--radius);
+}
+
+.bulk-select {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.875rem;
+    color: var(--gray-700);
+}
+
+.bulk-count {
+    font-size: 0.8rem;
+    color: var(--gray-500);
+}
+
+.bulk-buttons {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: center;
+}
+
+.bulk-actions select {
+    padding: 6px 10px;
+    border-radius: var(--radius);
+    border: 1px solid var(--gray-300);
+    font-size: 0.8rem;
+    background: white;
+}
+
 .empty-message {
     text-align: center;
     color: var(--gray-500);
@@ -515,6 +555,17 @@ section h2 {
     border-radius: var(--radius);
     margin-bottom: 8px;
     transition: all 0.15s ease;
+}
+
+.page-select {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.page-select-checkbox {
+    width: 16px;
+    height: 16px;
 }
 
 .page-item:hover {

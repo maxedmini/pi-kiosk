@@ -6,6 +6,7 @@ let displays = [];
 let systemInfo = { hostname: '', ip: '' };
 let sortable = null;
 let scheduleClipboard = [];
+let selectedPageIds = new Set();
 
 // DOM Elements
 const systemHostname = document.getElementById('systemHostname');
@@ -36,6 +37,15 @@ const pauseIcon = document.getElementById('pauseIcon');
 const pauseText = document.getElementById('pauseText');
 const btnSettings = document.getElementById('btnSettings');
 const copyInstallCmd = document.getElementById('copyInstallCmd');
+const selectAllPages = document.getElementById('selectAllPages');
+const selectedCount = document.getElementById('selectedCount');
+const btnBulkEnable = document.getElementById('btnBulkEnable');
+const btnBulkDisable = document.getElementById('btnBulkDisable');
+const btnBulkDelete = document.getElementById('btnBulkDelete');
+const btnBulkDuration = document.getElementById('btnBulkDuration');
+const btnBulkAssignDisplay = document.getElementById('btnBulkAssignDisplay');
+const bulkDisplaySelect = document.getElementById('bulkDisplaySelect');
+const clearSelectedPages = document.getElementById('clearSelectedPages');
 
 // Socket.IO Events
 socket.on('connect', () => {
@@ -300,7 +310,8 @@ function updateDisplaySelects() {
     const selects = [
         document.getElementById('newDisplayId'),
         document.getElementById('imageDisplayId'),
-        document.getElementById('editDisplayId')
+        document.getElementById('editDisplayId'),
+        bulkDisplaySelect
     ];
 
     selects.forEach(select => {
@@ -318,6 +329,24 @@ function updateDisplaySelects() {
             select.value = currentValue;
         }
     });
+}
+
+function updateBulkSelectionUI() {
+    const count = selectedPageIds.size;
+    if (selectedCount) {
+        selectedCount.textContent = `${count} selected`;
+    }
+    const hasSelection = count > 0;
+    if (btnBulkEnable) btnBulkEnable.disabled = !hasSelection;
+    if (btnBulkDisable) btnBulkDisable.disabled = !hasSelection;
+    if (btnBulkDelete) btnBulkDelete.disabled = !hasSelection;
+    if (btnBulkDuration) btnBulkDuration.disabled = !hasSelection;
+    if (btnBulkAssignDisplay) btnBulkAssignDisplay.disabled = !hasSelection;
+    if (clearSelectedPages) clearSelectedPages.disabled = !hasSelection;
+    if (selectAllPages) {
+        selectAllPages.checked = pages.length > 0 && count === pages.length;
+        selectAllPages.indeterminate = count > 0 && count < pages.length;
+    }
 }
 
 function renderDisplays() {
@@ -396,6 +425,8 @@ async function loadPages() {
     try {
         const response = await fetch('/api/pages');
         pages = await response.json();
+        const validIds = new Set(pages.map(p => p.id));
+        selectedPageIds = new Set(Array.from(selectedPageIds).filter(id => validIds.has(id)));
         renderPages();
     } catch (error) {
         console.error('Error loading pages:', error);
@@ -420,6 +451,7 @@ function renderPages() {
     if (pages.length === 0) {
         emptyMessage.style.display = 'block';
         pagesList.style.display = 'none';
+        updateBulkSelectionUI();
         return;
     }
 
@@ -442,9 +474,13 @@ function renderPages() {
         const scheduleBadge = page.schedule_enabled && scheduleLabel
             ? `<span class="page-schedule-badge ${page.is_active ? 'active' : 'inactive'}" title="Scheduled: ${escapeHtml(scheduleLabel)}">${escapeHtml(scheduleLabel)}</span>`
             : '';
+        const isSelected = selectedPageIds.has(page.id);
 
         return `
             <li class="page-item ${isCurrent ? 'current' : ''} ${!page.enabled ? 'disabled' : ''}" data-id="${page.id}">
+                <div class="page-select">
+                    <input type="checkbox" class="page-select-checkbox" data-id="${page.id}" ${isSelected ? 'checked' : ''}>
+                </div>
                 <div class="drag-handle" title="Drag to reorder">&#9776;</div>
                 <div class="page-thumbnail">${thumbnailHtml}</div>
                 <div class="page-info">
@@ -496,6 +532,47 @@ function renderPages() {
             }
         }
     });
+    updateBulkSelectionUI();
+}
+
+function clearBulkSelection() {
+    selectedPageIds.clear();
+    updateBulkSelectionUI();
+    renderPages();
+}
+
+async function updatePagesBulk(payload) {
+    const ids = Array.from(selectedPageIds);
+    if (!ids.length) return;
+    for (const id of ids) {
+        try {
+            await fetch(`/api/pages/${id}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+        } catch (error) {
+            console.error('Bulk update failed for page:', id, error);
+        }
+    }
+    await loadPages();
+}
+
+async function deletePagesBulk() {
+    const ids = Array.from(selectedPageIds);
+    if (!ids.length) return;
+    if (!confirm(`Delete ${ids.length} page${ids.length !== 1 ? 's' : ''}?`)) {
+        return;
+    }
+    for (const id of ids) {
+        try {
+            await fetch(`/api/pages/${id}`, { method: 'DELETE' });
+        } catch (error) {
+            console.error('Bulk delete failed for page:', id, error);
+        }
+    }
+    selectedPageIds.clear();
+    await loadPages();
 }
 
 function escapeHtml(text) {
@@ -526,6 +603,78 @@ btnSync.addEventListener('click', async () => {
         btnSync.disabled = false;
     }
 });
+
+// Bulk selection handlers
+if (pagesList) {
+    pagesList.addEventListener('change', (e) => {
+        const checkbox = e.target.closest('.page-select-checkbox');
+        if (!checkbox) return;
+        const id = parseInt(checkbox.getAttribute('data-id'));
+        if (!Number.isNaN(id)) {
+            if (checkbox.checked) {
+                selectedPageIds.add(id);
+            } else {
+                selectedPageIds.delete(id);
+            }
+            updateBulkSelectionUI();
+        }
+    });
+}
+
+if (selectAllPages) {
+    selectAllPages.addEventListener('change', (e) => {
+        if (e.target.checked) {
+            pages.forEach(p => selectedPageIds.add(p.id));
+        } else {
+            selectedPageIds.clear();
+        }
+        renderPages();
+    });
+}
+
+if (clearSelectedPages) {
+    clearSelectedPages.addEventListener('click', () => {
+        clearBulkSelection();
+    });
+}
+
+if (btnBulkEnable) {
+    btnBulkEnable.addEventListener('click', async () => {
+        await updatePagesBulk({ enabled: true });
+    });
+}
+
+if (btnBulkDisable) {
+    btnBulkDisable.addEventListener('click', async () => {
+        await updatePagesBulk({ enabled: false });
+    });
+}
+
+if (btnBulkDelete) {
+    btnBulkDelete.addEventListener('click', async () => {
+        await deletePagesBulk();
+    });
+}
+
+if (btnBulkDuration) {
+    btnBulkDuration.addEventListener('click', async () => {
+        const value = prompt('Set duration (seconds):');
+        if (value === null) return;
+        const duration = parseInt(value, 10);
+        if (!duration || duration < 1) {
+            alert('Please enter a valid duration in seconds.');
+            return;
+        }
+        await updatePagesBulk({ duration });
+    });
+}
+
+if (btnBulkAssignDisplay) {
+    btnBulkAssignDisplay.addEventListener('click', async () => {
+        const displayId = bulkDisplaySelect?.value || null;
+        await updatePagesBulk({ display_id: displayId || null });
+    });
+}
 
 btnPause.addEventListener('click', () => {
     // Check if any display is playing

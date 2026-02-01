@@ -78,6 +78,24 @@
         <!-- Pages List -->
         <section class="pages-list">
             <h2>Pages <span class="page-count" id="pageCount">(0)</span></h2>
+            <div class="bulk-actions">
+                <label class="bulk-select">
+                    <input type="checkbox" id="selectAllPages">
+                    Select all
+                </label>
+                <span class="bulk-count" id="selectedCount">0 selected</span>
+                <div class="bulk-buttons">
+                    <button type="button" class="btn btn-small btn-success" id="btnBulkEnable">Enable</button>
+                    <button type="button" class="btn btn-small btn-warning" id="btnBulkDisable">Disable</button>
+                    <button type="button" class="btn btn-small btn-danger" id="btnBulkDelete">Delete</button>
+                    <button type="button" class="btn btn-small btn-secondary" id="btnBulkDuration">Set duration</button>
+                    <select id="bulkDisplaySelect">
+                        <option value="">All Displays</option>
+                    </select>
+                    <button type="button" class="btn btn-small btn-secondary" id="btnBulkAssignDisplay">Assign display</button>
+                    <button type="button" class="btn btn-small btn-secondary" id="clearSelectedPages">Clear</button>
+                </div>
+            </div>
             <div id="pagesContainer">
                 <p class="empty-message" id="emptyMessage">No pages configured. Add a page or upload an image above to get started.</p>
                 <ul id="pagesList" class="sortable"></ul>
