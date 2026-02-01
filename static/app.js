@@ -103,7 +103,9 @@ function normalizeScheduleRanges(page) {
 
 function formatScheduleRanges(page) {
     if (!page || !page.schedule_enabled) return '';
-    const ranges = normalizeScheduleRanges(page);
+    const ranges = normalizeScheduleRanges(page)
+        .slice()
+        .sort((a, b) => (a.start || '').localeCompare(b.start || ''));
     if (!ranges.length) return '';
     return ranges.map(r => `${r.start}-${r.end}`).join(', ');
 }
