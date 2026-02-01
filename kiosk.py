@@ -51,6 +51,7 @@ CHROMIUM_CMD = find_chromium_cmd()
 browser_process = None
 pages = []
 current_index = 0
+browser_ready = False
 paused = False
 running = True
 server_url = DEFAULT_SERVER_URL
@@ -330,7 +331,7 @@ def launch_browser_with_tabs(urls):
     Args:
         urls: List of URLs to open as tabs
     """
-    global browser_process, current_index
+    global browser_process, current_index, browser_ready
 
     if not urls:
         log('No URLs to display')
@@ -340,6 +341,7 @@ def launch_browser_with_tabs(urls):
     for i, url in enumerate(urls):
         log(f'  Tab {i+1}: {url}')
 
+    browser_ready = False
     kill_browser()
     os.makedirs(PROFILE_DIR, exist_ok=True)
     clear_profile_locks()
@@ -402,6 +404,7 @@ def launch_browser_with_tabs(urls):
         # Chromium focuses the last opened tab; force first tab to align timing
         send_keystroke('ctrl+1')
         current_index = 0
+        browser_ready = True
         return True
     except Exception as e:
         log(f'Error launching browser: {e}')
@@ -485,13 +488,13 @@ def get_enabled_urls():
 
 def switcher_thread():
     """Background thread that rotates through tabs."""
-    global current_index, running, paused, page_switch_counts
+    global current_index, running, paused, page_switch_counts, browser_ready
 
     log('Switcher thread started')
 
     while running:
-        # Wait if paused or no pages
-        if paused or not pages:
+        # Wait if paused, no pages, or browser not ready
+        if paused or not pages or not browser_ready:
             time.sleep(0.5)
             continue
 

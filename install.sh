@@ -136,6 +136,7 @@ CHROMIUM_CMD = find_chromium()
 browser_process = None
 pages = []
 current_index = 0
+browser_ready = False
 paused = False
 running = True
 server_url = DEFAULT_SERVER_URL
@@ -204,8 +205,9 @@ def send_keystroke(keys):
 
 def launch_browser_with_tabs(urls):
     """Launch Chromium with all URLs as tabs."""
-    global browser_process, current_index
+    global browser_process, current_index, browser_ready
     if not urls: urls = [f'{server_url}/static/default.png']
+    browser_ready = False
     log(f'Launching browser with {len(urls)} tabs')
     kill_browser()
     os.makedirs(PROFILE_DIR, exist_ok=True)
@@ -224,6 +226,7 @@ def launch_browser_with_tabs(urls):
         time.sleep(3)
         send_keystroke('ctrl+1')
         current_index = 0
+        browser_ready = True
         return True
     except Exception as e:
         log(f'Error: {e}')
@@ -242,10 +245,10 @@ def get_enabled_urls():
 
 def switcher_thread():
     """Background thread that rotates tabs."""
-    global current_index, page_switch_counts
+    global current_index, page_switch_counts, browser_ready
     log('Switcher started')
     while running:
-        if paused or not pages:
+        if paused or not pages or not browser_ready:
             time.sleep(0.5); continue
         page = get_current_page()
         if not page: time.sleep(1); continue
