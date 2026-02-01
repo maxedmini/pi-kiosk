@@ -966,6 +966,13 @@ def control_kiosk():
     return jsonify({'success': True, 'action': action})
 
 
+@app.route('/api/displays/sync', methods=['POST'])
+def sync_displays():
+    """Force all displays to reload their page list."""
+    socketio.emit('pages_updated', {'action': 'sync'})
+    return jsonify({'success': True})
+
+
 # WebSocket Events
 
 @socketio.on('connect')

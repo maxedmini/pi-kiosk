@@ -30,6 +30,7 @@ const btnPrev = document.getElementById('btnPrev');
 const btnNext = document.getElementById('btnNext');
 const btnPause = document.getElementById('btnPause');
 const btnRefresh = document.getElementById('btnRefresh');
+const btnSync = document.getElementById('btnSync');
 const pauseIcon = document.getElementById('pauseIcon');
 const pauseText = document.getElementById('pauseText');
 const btnSettings = document.getElementById('btnSettings');
@@ -364,6 +365,14 @@ function escapeHtml(text) {
 btnPrev.addEventListener('click', () => sendControl('prev'));
 btnNext.addEventListener('click', () => sendControl('next'));
 btnRefresh.addEventListener('click', () => sendControl('refresh'));
+btnSync.addEventListener('click', async () => {
+    try {
+        await fetch('/api/displays/sync', { method: 'POST' });
+    } catch (error) {
+        console.error('Error syncing displays:', error);
+        alert('Failed to sync displays');
+    }
+});
 
 btnPause.addEventListener('click', () => {
     // Check if any display is playing
