@@ -137,6 +137,8 @@ browser_process = None
 pages = []
 current_index = 0
 browser_ready = False
+sync_target_page_id = None
+sync_at = None
 paused = False
 running = True
 server_url = DEFAULT_SERVER_URL
@@ -245,9 +247,17 @@ def get_enabled_urls():
 
 def switcher_thread():
     """Background thread that rotates tabs."""
-    global current_index, page_switch_counts, browser_ready
+    global current_index, page_switch_counts, browser_ready, sync_target_page_id, sync_at
     log('Switcher started')
     while running:
+        if paused and browser_ready and sync_at is not None:
+            if time.time() >= sync_at:
+                if sync_target_page_id is not None:
+                    goto_page_id(sync_target_page_id)
+                paused = False
+                sync_at = None
+                sync_target_page_id = None
+                send_status()
         if paused or not pages or not browser_ready:
             time.sleep(0.5); continue
         page = get_current_page()
@@ -303,6 +313,39 @@ def on_pages_list(data):
 @sio.on('pages_updated')
 def on_pages_updated(data): sio.emit('request_pages', {'hostname': get_hostname()})
 
+@sio.on('sync')
+def on_sync(data):
+    global paused, sync_target_page_id, sync_at
+    if not data: return
+    sync_at_value = data.get('sync_at')
+    page_id = data.get('page_id')
+    try: sync_at_value = float(sync_at_value)
+    except: sync_at_value = time.time() + 2.0
+    sync_at = sync_at_value
+    sync_target_page_id = page_id
+    paused = True
+    log(f'Sync scheduled at {sync_at} for page {sync_target_page_id}')
+
+def goto_page_id(page_id):
+    global current_index
+    if not pages: return
+    try: page_id = int(page_id)
+    except: return
+    idx = next((i for i, p in enumerate(pages) if p.get('id') == page_id), None)
+    if idx is None: return
+    if idx == current_index:
+        send_status(); return
+    if 1 <= idx+1 <= 9:
+        send_keystroke(f'ctrl+{idx+1}')
+        current_index = idx
+        send_status()
+        return
+    while current_index != idx:
+        send_keystroke('ctrl+Tab')
+        current_index = (current_index + 1) % len(pages)
+        time.sleep(0.2)
+    send_status()
+
 @sio.on('control')
 def on_control(data):
     global paused, current_index
@@ -316,10 +359,7 @@ def on_control(data):
     elif action == 'goto':
         page_id = data.get('page_id')
         if page_id:
-            for i, p in enumerate(pages):
-                if p['id'] == page_id:
-                    if 1 <= i+1 <= 9: send_keystroke(f'ctrl+{i+1}'); current_index = i
-                    send_status(); break
+            goto_page_id(page_id)
     elif action == 'login_mode':
         paused = True
         try: subprocess.run(['pkill', 'unclutter'], capture_output=True, timeout=2)

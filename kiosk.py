@@ -52,6 +52,8 @@ browser_process = None
 pages = []
 current_index = 0
 browser_ready = False
+sync_target_page_id = None
+sync_at = None
 paused = False
 running = True
 server_url = DEFAULT_SERVER_URL
@@ -488,11 +490,20 @@ def get_enabled_urls():
 
 def switcher_thread():
     """Background thread that rotates through tabs."""
-    global current_index, running, paused, page_switch_counts, browser_ready
+    global current_index, running, paused, page_switch_counts, browser_ready, sync_target_page_id, sync_at
 
     log('Switcher thread started')
 
     while running:
+        # If a sync is scheduled, wait for the target time and align
+        if paused and browser_ready and sync_at is not None:
+            if time.time() >= sync_at:
+                if sync_target_page_id is not None:
+                    goto_page_id(sync_target_page_id)
+                paused = False
+                sync_at = None
+                sync_target_page_id = None
+                send_status()
         # Wait if paused, no pages, or browser not ready
         if paused or not pages or not browser_ready:
             time.sleep(0.5)
@@ -553,6 +564,38 @@ def refresh_pages():
         log(f'Error requesting pages: {e}')
 
 
+def goto_page_id(page_id):
+    """Switch to a specific page by id."""
+    global current_index
+    if not pages:
+        return
+    try:
+        page_id = int(page_id)
+    except Exception:
+        return
+    idx = next((i for i, p in enumerate(pages) if p.get('id') == page_id), None)
+    if idx is None:
+        return
+    if idx == current_index:
+        send_status()
+        schedule_screenshot()
+        return
+    tab_num = idx + 1
+    if 1 <= tab_num <= 9:
+        send_keystroke(f'ctrl+{tab_num}')
+        current_index = idx
+        send_status()
+        schedule_screenshot()
+        return
+    # For tabs > 9, cycle through
+    while current_index != idx:
+        send_keystroke('ctrl+Tab')
+        current_index = (current_index + 1) % len(pages)
+        time.sleep(0.2)
+    send_status()
+    schedule_screenshot()
+
+
 # Socket.IO Event Handlers
 @sio.event
 def connect():
@@ -596,6 +639,24 @@ def on_pages_updated(data):
     refresh_pages()
 
 
+@sio.on('sync')
+def on_sync(data):
+    """Align all displays to the same page at the same time."""
+    global paused, sync_target_page_id, sync_at
+    if not data:
+        return
+    sync_at_value = data.get('sync_at')
+    page_id = data.get('page_id')
+    try:
+        sync_at_value = float(sync_at_value)
+    except Exception:
+        sync_at_value = time.time() + 2.0
+    sync_at = sync_at_value
+    sync_target_page_id = page_id
+    paused = True
+    log(f'Sync scheduled at {sync_at} for page {sync_target_page_id}')
+
+
 @sio.on('control')
 def on_control(data):
     """Handle control commands from server."""
@@ -631,25 +692,7 @@ def on_control(data):
     elif action == 'goto':
         page_id = data.get('page_id')
         if page_id:
-            # Find index of page
-            for i, p in enumerate(pages):
-                if p['id'] == page_id:
-                    # Use Ctrl+1/2/3/... for direct tab access (1-9 only)
-                    tab_num = i + 1
-                    if 1 <= tab_num <= 9:
-                        send_keystroke(f'ctrl+{tab_num}')
-                        current_index = i
-                        send_status()
-                        schedule_screenshot()
-                    else:
-                        # For tabs > 9, cycle through
-                        while current_index != i:
-                            send_keystroke('ctrl+Tab')
-                            current_index = (current_index + 1) % len(pages)
-                            time.sleep(0.2)
-                        send_status()
-                        schedule_screenshot()
-                    break
+            goto_page_id(page_id)
 
     elif action == 'login_mode':
         log('Entering login mode')

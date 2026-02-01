@@ -968,9 +968,19 @@ def control_kiosk():
 
 @app.route('/api/displays/sync', methods=['POST'])
 def sync_displays():
-    """Force all displays to reload their page list."""
-    socketio.emit('pages_updated', {'action': 'sync'})
-    return jsonify({'success': True})
+    """Align all displays to the same page at the same time."""
+    data = request.get_json(silent=True) or {}
+    page_id = data.get('page_id')
+    delay_ms = data.get('delay_ms', 3000)
+    try:
+        delay_ms = int(delay_ms)
+    except Exception:
+        delay_ms = 3000
+    sync_at = time.time() + max(0, delay_ms) / 1000.0
+    if data.get('reload'):
+        socketio.emit('pages_updated', {'action': 'sync'})
+    socketio.emit('sync', {'sync_at': sync_at, 'page_id': page_id})
+    return jsonify({'success': True, 'sync_at': sync_at})
 
 
 # WebSocket Events
