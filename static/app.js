@@ -367,10 +367,21 @@ btnNext.addEventListener('click', () => sendControl('next'));
 btnRefresh.addEventListener('click', () => sendControl('refresh'));
 btnSync.addEventListener('click', async () => {
     try {
+        btnSync.disabled = true;
+        await sendControl('pause');
         await fetch('/api/displays/sync', { method: 'POST' });
+        await loadPages();
+        const target = pages.find(p => p.enabled && p.is_active) || pages.find(p => p.enabled);
+        if (target) {
+            await sendControl('goto', { page_id: target.id });
+        }
+        await new Promise(r => setTimeout(r, 500));
+        await sendControl('resume');
     } catch (error) {
         console.error('Error syncing displays:', error);
         alert('Failed to sync displays');
+    } finally {
+        btnSync.disabled = false;
     }
 });
 
