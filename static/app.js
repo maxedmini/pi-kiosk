@@ -191,6 +191,20 @@ function updateScheduleTimeline(containerId) {
     });
 }
 
+function sortScheduleRows(containerId) {
+    const ranges = collectScheduleRanges(containerId);
+    if (!ranges.length) return;
+    ranges.sort((a, b) => {
+        const aStart = timeToMinutes(a.start) ?? 0;
+        const bStart = timeToMinutes(b.start) ?? 0;
+        if (aStart !== bStart) return aStart - bStart;
+        const aEnd = timeToMinutes(a.end) ?? 0;
+        const bEnd = timeToMinutes(b.end) ?? 0;
+        return aEnd - bEnd;
+    });
+    setScheduleRows(containerId, ranges);
+}
+
 function parseScheduleText(text) {
     if (!text) return [];
     const trimmed = text.trim();
@@ -251,6 +265,7 @@ document.addEventListener('click', (e) => {
         const applyRanges = (ranges) => {
             if (!ranges || !ranges.length) return;
             setScheduleRows(targetId, ranges);
+            sortScheduleRows(targetId);
             updateScheduleTimeline(targetId);
         };
         if (navigator.clipboard?.readText) {
@@ -270,6 +285,13 @@ document.addEventListener('input', (e) => {
     if (e.target.classList.contains('schedule-start') || e.target.classList.contains('schedule-end')) {
         const container = e.target.closest('.schedule-rows');
         if (container?.id) updateScheduleTimeline(container.id);
+    }
+});
+
+document.addEventListener('change', (e) => {
+    if (e.target.classList.contains('schedule-start') || e.target.classList.contains('schedule-end')) {
+        const container = e.target.closest('.schedule-rows');
+        if (container?.id) sortScheduleRows(container.id);
     }
 });
 
