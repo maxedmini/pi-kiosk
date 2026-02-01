@@ -703,7 +703,7 @@ def on_pages_list(data):
 @sio.on('pages_sync')
 def on_pages_sync(data):
     """Handle synced pages list from server."""
-    global pages, current_index, sync_enabled, sync_server_time, sync_received_at
+    global pages, current_index, sync_enabled, sync_server_time, sync_received_at, reset_timer
     if not data:
         return
     pages = data.get('pages', [])
@@ -712,6 +712,7 @@ def on_pages_sync(data):
     sync_received_at = time.time()
     log(f'Received {len(pages)} pages (sync mode={sync_enabled})')
     current_index = 0
+    reset_timer = True
     urls = get_enabled_urls()
     launch_browser_with_tabs(urls)
     if pages:
