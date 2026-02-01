@@ -534,6 +534,24 @@ EOF
 systemctl daemon-reload
 
 echo ""
+echo "[5.5/8] Installing Argon One fan service (if available)..."
+if ! command -v argon-config >/dev/null 2>&1; then
+    curl -sSL https://download.argon40.com/argon1.sh | bash || true
+fi
+if [ -f /etc/argononed.conf ]; then
+    cat > /etc/argononed.conf << 'EOF'
+#
+# Argon Fan Speed Configuration (CPU)
+#
+55=30
+60=55
+65=100
+EOF
+    systemctl enable argononed >/dev/null 2>&1 || true
+    systemctl restart argononed >/dev/null 2>&1 || true
+fi
+
+echo ""
 echo "[4.5/8] Configuring sudo permissions..."
 SUDOERS_FILE="/etc/sudoers.d/pi-kiosk"
 cat > "$SUDOERS_FILE" << EOF
