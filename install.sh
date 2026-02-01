@@ -253,14 +253,14 @@ def switcher_thread():
         page = get_current_page()
         if not page: time.sleep(1); continue
         duration = page.get('duration', 30)
-        log(f'Starting page: id={page.get(\"id\")} name={page.get(\"name\", \"\")!s} duration={duration}s index={current_index}')
+        log(f"Starting page: id={page.get('id')} name={page.get('name', '')} duration={duration}s index={current_index}")
         start = time.monotonic()
         while running and not paused:
             elapsed = time.monotonic() - start
             if elapsed >= duration:
                 break
             time.sleep(min(0.1, duration - elapsed))
-        log(f'Completed page: id={page.get(\"id\")} elapsed={elapsed:.2f}s target={duration}s')
+        log(f"Completed page: id={page.get('id')} elapsed={elapsed:.2f}s target={duration}s")
         if running and not paused and pages:
             send_keystroke('ctrl+Tab')
             current_index = (current_index + 1) % len(pages)
