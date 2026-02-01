@@ -113,10 +113,12 @@ if [ -f "$SCRIPT_DIR/server.py" ]; then
     cp -a "$SCRIPT_DIR/." "$INSTALL_DIR/" 2>/dev/null || true
 else
     # Create kiosk.py inline for remote install (tab-based xiosk-style version)
+    # Updated with scheduling support and fallback image features
     cat > "$INSTALL_DIR/kiosk.py" << 'KIOSKEOF'
 #!/usr/bin/env python3
 """Pi Kiosk - Tab-Based Edition (xiosk-style)
-Opens all URLs as browser tabs and uses Ctrl+Tab to rotate."""
+Opens all URLs as browser tabs and uses Ctrl+Tab to rotate.
+Includes scheduling support and fallback to default image."""
 import argparse, os, shutil, signal, socket, subprocess, sys, threading, time
 import urllib.request
 import socketio
@@ -202,7 +204,7 @@ def send_keystroke(keys):
 def launch_browser_with_tabs(urls):
     """Launch Chromium with all URLs as tabs."""
     global browser_process
-    if not urls: urls = ['about:blank']
+    if not urls: urls = [f'{server_url}/static/default.png']
     log(f'Launching browser with {len(urls)} tabs')
     kill_browser()
     os.makedirs(PROFILE_DIR, exist_ok=True)
@@ -225,7 +227,15 @@ def launch_browser_with_tabs(urls):
         return False
 
 def get_enabled_urls():
-    return [build_url(p['url']) for p in pages if p.get('enabled', True)]
+    """Get list of URLs from enabled pages."""
+    urls = []
+    for page in pages:
+        if page.get('enabled', True):
+            urls.append(build_url(page['url']))
+    # Fallback to default image if no pages available
+    if not urls:
+        urls = [f'{server_url}/static/default.png']
+    return urls
 
 def switcher_thread():
     """Background thread that rotates tabs."""
@@ -271,9 +281,13 @@ def on_pages_list(data):
     log(f'Received {len(data)} pages')
     pages = data
     current_index = 0
+    # Get URLs and launch browser (get_enabled_urls handles fallback)
     urls = get_enabled_urls()
-    launch_browser_with_tabs(urls if urls else ['about:blank'])
-    send_status()
+    launch_browser_with_tabs(urls)
+    if pages:
+        send_status()
+    else:
+        log('No pages configured, showing default image')
 
 @sio.on('pages_updated')
 def on_pages_updated(data): sio.emit('request_pages', {'hostname': get_hostname()})
@@ -371,7 +385,7 @@ def main():
                 last_crash = now
                 log('Browser crashed, relaunching...')
                 urls = get_enabled_urls()
-                launch_browser_with_tabs(urls if urls else ['about:blank'])
+                launch_browser_with_tabs(urls)
             sio.sleep(2)
         except KeyboardInterrupt: break
         except Exception as e: log(f'Error: {e}'); time.sleep(5)
