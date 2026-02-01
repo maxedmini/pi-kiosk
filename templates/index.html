@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OddFox Kiosk Manager</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <div class="header-logo">
+                <img src="/static/Oddfox on white.png" alt="OddFox" class="logo">
+            </div>
+            <div class="header-main">
+                <h1>OddFox Kiosk Manager</h1>
+                <div class="system-info">
+                    <span class="hostname" id="systemHostname">Loading...</span>
+                    <span class="ip" id="systemIp"></span>
+                    <button class="btn btn-small btn-secondary" id="btnSettings" title="Settings">
+                        <span class="icon">&#9881;</span>
+                    </button>
+                </div>
+            </div>
+            <div class="status-bar">
+                <span class="display-count" id="displayCount">0 displays connected</span>
+            </div>
+        </header>
+
+        <!-- Connected Displays Section -->
+        <section class="displays-section">
+            <h2>Connected Displays</h2>
+            <div id="displaysContainer">
+                <p class="empty-message" id="noDisplays">No displays connected. Install the kiosk client on your Pi devices.</p>
+                <div id="displaysList" class="displays-grid"></div>
+            </div>
+        </section>
+
+        <!-- Global Controls -->
+        <section class="controls">
+            <h2>All Displays Control</h2>
+            <div class="control-buttons">
+                <button id="btnPrev" class="btn btn-secondary" title="Previous page (all)">
+                    <span class="icon">&#9664;</span> Prev
+                </button>
+                <button id="btnPause" class="btn btn-primary" title="Pause/Resume rotation (all)">
+                    <span class="icon" id="pauseIcon">&#10074;&#10074;</span>
+                    <span id="pauseText">Pause All</span>
+                </button>
+                <button id="btnNext" class="btn btn-secondary" title="Next page (all)">
+                    Next <span class="icon">&#9654;</span>
+                </button>
+                <button id="btnRefresh" class="btn btn-secondary" title="Refresh current page (all)">
+                    <span class="icon">&#8635;</span> Refresh
+                </button>
+                <button id="btnLoginMode" class="btn btn-warning" title="Enable mouse cursor for manual login">
+                    <span class="icon">&#128274;</span> Login Mode
+                </button>
+                <button id="btnAdminMode" class="btn btn-secondary" title="Minimize browser to access Pi desktop">
+                    <span class="icon">&#128187;</span> Admin Mode
+                </button>
+            </div>
+            <p class="login-mode-help" id="loginModeHelp" style="display:none; margin-top:10px; padding:10px; background:#fef3c7; border-radius:6px; font-size:0.875rem;">
+                <strong>Login Mode Active:</strong> Mouse cursor is visible. Log in to your websites, then click "Exit Login Mode" when done.
+                The browser will remember your sessions.
+                <button id="btnExitLoginMode" class="btn btn-small btn-success" style="margin-left:10px;">Exit Login Mode</button>
+            </p>
+            <p class="admin-mode-help" id="adminModeHelp" style="display:none; margin-top:10px; padding:10px; background:#dbeafe; border-radius:6px; font-size:0.875rem;">
+                <strong>Admin Mode Active:</strong> Browser is minimized. You can now access the Pi desktop to configure WiFi, settings, etc.
+                Click "Exit Admin Mode" to restore the kiosk display.
+                <button id="btnExitAdminMode" class="btn btn-small btn-primary" style="margin-left:10px;">Exit Admin Mode</button>
+            </p>
+        </section>
+
+        <!-- Pages List -->
+        <section class="pages-list">
+            <h2>Pages <span class="page-count" id="pageCount">(0)</span></h2>
+            <div id="pagesContainer">
+                <p class="empty-message" id="emptyMessage">No pages configured. Add a page or upload an image above to get started.</p>
+                <ul id="pagesList" class="sortable"></ul>
+            </div>
+        </section>
+
+        <!-- Add New Content -->
+        <section class="add-page">
+            <h2>Add Content</h2>
+            <div class="add-tabs">
+                <button class="tab-btn active" data-tab="url">Add URL</button>
+                <button class="tab-btn" data-tab="image">Upload Image</button>
+            </div>
+
+            <!-- URL Tab -->
+            <form id="addPageForm" class="tab-content active" data-tab="url">
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="newUrl">URL</label>
+                        <input type="url" id="newUrl" placeholder="https://example.com" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="newName">Name (optional)</label>
+                        <input type="text" id="newName" placeholder="My Dashboard">
+                    </div>
+                    <div class="form-group small">
+                        <label for="newDuration">Duration (sec)</label>
+                        <input type="number" id="newDuration" value="30" min="5" max="3600">
+                    </div>
+                    <div class="form-group">
+                        <label for="newDisplayId">Display</label>
+                        <select id="newDisplayId">
+                            <option value="">All Displays</option>
+                        </select>
+                    </div>
+                    <div class="form-group checkbox-group">
+                        <label title="Refresh this page periodically">
+                            <input type="checkbox" id="newRefresh"> Auto-refresh
+                        </label>
+                    </div>
+                    <div class="form-group small refresh-interval-group" id="newRefreshIntervalGroup" style="display:none;">
+                        <label for="newRefreshInterval">Every N switches</label>
+                        <input type="number" id="newRefreshInterval" value="1" min="1" max="100">
+                    </div>
+                    <button type="submit" class="btn btn-success">Add Page</button>
+                </div>
+            </form>
+
+            <!-- Image Upload Tab -->
+            <form id="uploadImageForm" class="tab-content" data-tab="image">
+                <div class="form-row">
+                    <div class="form-group file-input-group">
+                        <label for="imageFile">Image File</label>
+                        <input type="file" id="imageFile" accept="image/*" required>
+                        <div class="file-preview" id="filePreview"></div>
+                    </div>
+                    <div class="form-group">
+                        <label for="imageName">Name (optional)</label>
+                        <input type="text" id="imageName" placeholder="My Image">
+                    </div>
+                    <div class="form-group small">
+                        <label for="imageDuration">Duration (sec)</label>
+                        <input type="number" id="imageDuration" value="30" min="5" max="3600">
+                    </div>
+                    <div class="form-group">
+                        <label for="imageDisplayId">Display</label>
+                        <select id="imageDisplayId">
+                            <option value="">All Displays</option>
+                        </select>
+                    </div>
+                    <div class="form-group checkbox-group">
+                        <label title="Refresh this page periodically">
+                            <input type="checkbox" id="imageRefresh"> Auto-refresh
+                        </label>
+                    </div>
+                    <div class="form-group small refresh-interval-group" id="imageRefreshIntervalGroup" style="display:none;">
+                        <label for="imageRefreshInterval">Every N switches</label>
+                        <input type="number" id="imageRefreshInterval" value="1" min="1" max="100">
+                    </div>
+                    <button type="submit" class="btn btn-success">Upload Image</button>
+                </div>
+            </form>
+        </section>
+        <!-- Install Instructions -->
+        <section class="install-section">
+            <h2>Add More Displays</h2>
+            <p>To add another Pi as a display client, SSH into it and run:</p>
+            <div class="install-command">
+                <code id="installCommand">curl -sSL http://<span id="installIp">localhost</span>:5000/install.sh | sudo bash -s -- client <span id="installIp2">localhost</span></code>
+                <button class="btn btn-small btn-secondary" id="copyInstallCmd" title="Copy command">Copy</button>
+            </div>
+        </section>
+    </div>
+
+    <!-- Edit Page Modal -->
+    <div id="editModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>Edit Page</h3>
+                <button class="close-btn" id="closeModal">&times;</button>
+            </div>
+            <form id="editPageForm">
+                <input type="hidden" id="editId">
+                <div class="form-group">
+                    <label for="editUrl">URL</label>
+                    <input type="url" id="editUrl" required>
+                </div>
+                <div class="form-group">
+                    <label for="editName">Name</label>
+                    <input type="text" id="editName">
+                </div>
+                <div class="form-group">
+                    <label for="editDuration">Duration (seconds)</label>
+                    <input type="number" id="editDuration" min="5" max="3600">
+                </div>
+                <div class="form-group">
+                    <label for="editDisplayId">Display</label>
+                    <select id="editDisplayId">
+                        <option value="">All Displays</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>
+                        <input type="checkbox" id="editEnabled"> Enabled
+                    </label>
+                </div>
+                <div class="form-group">
+                    <label title="Refresh this page periodically">
+                        <input type="checkbox" id="editRefresh"> Auto-refresh
+                    </label>
+                </div>
+                <div class="form-group refresh-interval-group" id="editRefreshIntervalGroup" style="display:none;">
+                    <label for="editRefreshInterval">Refresh every N switches</label>
+                    <input type="number" id="editRefreshInterval" value="1" min="1" max="100">
+                </div>
+                <div class="modal-actions">
+                    <button type="button" class="btn btn-secondary" id="cancelEdit">Cancel</button>
+                    <button type="submit" class="btn btn-primary">Save Changes</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Settings Modal -->
+    <div id="settingsModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>System Settings</h3>
+                <button class="close-btn" id="closeSettings">&times;</button>
+            </div>
+            <form id="settingsForm">
+                <div class="form-group">
+                    <label for="settingsHostname">Hostname</label>
+                    <input type="text" id="settingsHostname" pattern="[a-zA-Z0-9\-]+" title="Letters, numbers, and hyphens only">
+                    <small>Changing hostname requires a reboot for full effect</small>
+                </div>
+                <div class="form-group">
+                    <label>IP Address</label>
+                    <input type="text" id="settingsIp" disabled>
+                </div>
+                <div class="modal-actions">
+                    <button type="button" class="btn btn-danger" id="btnReboot">Reboot Pi</button>
+                    <button type="button" class="btn btn-secondary" id="cancelSettings">Cancel</button>
+                    <button type="submit" class="btn btn-primary">Save Hostname</button>
+                </div>
+            </form>
+            <hr style="margin: 20px 0; border-color: #374151;">
+            <h4 style="margin-bottom: 15px;">Remote Control</h4>
+            <div class="modal-actions" style="justify-content: flex-start; gap: 10px; margin-bottom: 20px;">
+                <button type="button" class="btn btn-warning" id="btnRestartAllDisplays">Restart All Displays</button>
+                <button type="button" class="btn btn-danger" id="btnRebootAll">Reboot All Pis</button>
+                <button type="button" class="btn btn-secondary" id="btnUpdateAllDisplays">Update All Displays</button>
+            </div>
+            <hr style="margin: 20px 0; border-color: #374151;">
+            <h4 style="margin-bottom: 15px;">Push WiFi Credentials</h4>
+            <p style="font-size: 0.875rem; color: #94a3b8; margin-bottom: 15px;">
+                Add a WiFi network to all connected displays. Networks are saved for future use.
+            </p>
+            <form id="wifiForm">
+                <div class="form-group">
+                    <label for="wifiSsid">WiFi Network Name (SSID)</label>
+                    <input type="text" id="wifiSsid" placeholder="MyNetwork" required>
+                </div>
+                <div class="form-group">
+                    <label for="wifiPassword">WiFi Password</label>
+                    <input type="password" id="wifiPassword" placeholder="Password">
+                    <small>Leave empty for open networks</small>
+                </div>
+                <div class="form-group">
+                    <label>
+                        <input type="checkbox" id="wifiHidden"> Hidden network
+                    </label>
+                </div>
+                <div class="modal-actions">
+                    <button type="submit" class="btn btn-primary">Push to All Displays</button>
+                </div>
+            </form>
+            <div id="wifiStatus" style="margin-top: 10px; display: none;"></div>
+        </div>
+    </div>
+
+    <footer class="site-footer">
+        <p>Created and owned by Scott Taylor</p>
+    </footer>
+
+    <script src="/socket.io/socket.io.js?v=1"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Sortable/1.15.0/Sortable.min.js"></script>
+    <script src="/static/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,826 @@
+// Pi Kiosk Manager - Frontend JavaScript
+
+const socket = io();
+let pages = [];
+let displays = [];
+let systemInfo = { hostname: '', ip: '' };
+let sortable = null;
+
+// DOM Elements
+const systemHostname = document.getElementById('systemHostname');
+const systemIp = document.getElementById('systemIp');
+const displayCount = document.getElementById('displayCount');
+const displaysList = document.getElementById('displaysList');
+const noDisplays = document.getElementById('noDisplays');
+const pagesList = document.getElementById('pagesList');
+const pageCount = document.getElementById('pageCount');
+const emptyMessage = document.getElementById('emptyMessage');
+const addPageForm = document.getElementById('addPageForm');
+const uploadImageForm = document.getElementById('uploadImageForm');
+const editModal = document.getElementById('editModal');
+const editPageForm = document.getElementById('editPageForm');
+const settingsModal = document.getElementById('settingsModal');
+const settingsForm = document.getElementById('settingsForm');
+const filePreview = document.getElementById('filePreview');
+const installIp = document.getElementById('installIp');
+const installIp2 = document.getElementById('installIp2');
+
+// Control buttons
+const btnPrev = document.getElementById('btnPrev');
+const btnNext = document.getElementById('btnNext');
+const btnPause = document.getElementById('btnPause');
+const btnRefresh = document.getElementById('btnRefresh');
+const pauseIcon = document.getElementById('pauseIcon');
+const pauseText = document.getElementById('pauseText');
+const btnSettings = document.getElementById('btnSettings');
+const copyInstallCmd = document.getElementById('copyInstallCmd');
+
+// Socket.IO Events
+socket.on('connect', () => {
+    console.log('Connected to server');
+    loadPages();
+    loadSystemInfo();
+    loadDisplays();
+});
+
+socket.on('disconnect', () => {
+    console.log('Disconnected from server');
+});
+
+socket.on('displays_updated', (data) => {
+    console.log('Displays updated:', data);
+    displays = data;
+    renderDisplays();
+    updateDisplaySelects();
+    updateGlobalPauseButton();
+});
+
+socket.on('pages_updated', () => {
+    console.log('Pages updated, reloading...');
+    loadPages();
+});
+
+// Functions
+async function loadSystemInfo() {
+    try {
+        const response = await fetch('/api/system/hostname');
+        systemInfo = await response.json();
+        systemHostname.textContent = systemInfo.hostname;
+        systemIp.textContent = `(${systemInfo.ip})`;
+        installIp.textContent = systemInfo.ip;
+        installIp2.textContent = systemInfo.ip;
+    } catch (error) {
+        console.error('Error loading system info:', error);
+    }
+}
+
+function absoluteUrl(url) {
+    if (!url) return '';
+    if (url.startsWith('http://') || url.startsWith('https://')) return url;
+    const base = systemInfo?.ip ? `http://${systemInfo.ip}:5000` : window.location.origin;
+    return `${base}${url.startsWith('/') ? '' : '/'}${url}`;
+}
+
+function updateDisplaySelects() {
+    // Update all display select dropdowns
+    const selects = [
+        document.getElementById('newDisplayId'),
+        document.getElementById('imageDisplayId'),
+        document.getElementById('editDisplayId')
+    ];
+
+    selects.forEach(select => {
+        if (!select) return;
+        const currentValue = select.value;
+        select.innerHTML = '<option value="">All Displays</option>';
+        displays.forEach(d => {
+            const option = document.createElement('option');
+            option.value = d.hostname;
+            option.textContent = d.hostname;
+            select.appendChild(option);
+        });
+        // Restore previous selection if still valid
+        if (currentValue) {
+            select.value = currentValue;
+        }
+    });
+}
+
+function renderDisplays() {
+    displayCount.textContent = `${displays.length} display${displays.length !== 1 ? 's' : ''} connected`;
+
+    if (displays.length === 0) {
+        noDisplays.style.display = 'block';
+        displaysList.style.display = 'none';
+        return;
+    }
+
+    noDisplays.style.display = 'none';
+    displaysList.style.display = 'grid';
+
+    displaysList.innerHTML = displays.map(display => {
+        const page = pages.find(p => p.id === display.current_page_id);
+        const pageName = page?.name || 'Unknown';
+        const statusClass = display.paused ? 'paused' : 'online';
+        const screenshotUrl = display.screenshot_url
+            ? `${absoluteUrl(display.screenshot_url)}?t=${Date.now()}`
+            : '';
+        const fallbackUrl = page?.type === 'image'
+            ? absoluteUrl(page?.thumbnail || display.current_url)
+            : absoluteUrl(display.current_url || page?.url || '');
+        const previewHtml = screenshotUrl
+            ? `<img src="${escapeHtml(screenshotUrl)}" alt="Screenshot">`
+            : (fallbackUrl
+                ? (page?.type === 'image'
+                    ? `<img src="${escapeHtml(fallbackUrl)}" alt="Preview">`
+                    : `<iframe src="${escapeHtml(fallbackUrl)}" loading="lazy" referrerpolicy="no-referrer" sandbox="allow-scripts allow-same-origin allow-forms allow-popups"></iframe>`)
+                : `<div class="display-preview-empty">No preview</div>`);
+        const previewLink = fallbackUrl
+            ? `<a href="${escapeHtml(fallbackUrl)}" target="_blank" rel="noopener">Open</a>`
+            : '';
+
+        return `
+            <div class="display-card ${statusClass}">
+                <div class="display-header">
+                    <span class="display-name">${escapeHtml(display.hostname)}</span>
+                    <span class="display-status ${statusClass}">${display.paused ? 'Paused' : 'Playing'}</span>
+                </div>
+                <div class="display-info">
+                    <div>IP: ${escapeHtml(display.ip)}</div>
+                    <div>Page: ${escapeHtml(pageName)} (${display.current_index + 1}/${display.total_pages || '?'})</div>
+                </div>
+                <div class="display-preview">
+                    ${previewHtml}
+                    <div class="display-preview-link">${previewLink}</div>
+                </div>
+                <div class="display-controls">
+                    <button class="btn btn-small btn-secondary" onclick="sendControlToDisplay('${display.id}', 'prev')" title="Previous">&#9664;</button>
+                    <button class="btn btn-small btn-${display.paused ? 'success' : 'primary'}" onclick="sendControlToDisplay('${display.id}', '${display.paused ? 'resume' : 'pause'}')" title="${display.paused ? 'Resume' : 'Pause'}">
+                        ${display.paused ? '&#9654;' : '&#10074;&#10074;'}
+                    </button>
+                    <button class="btn btn-small btn-secondary" onclick="sendControlToDisplay('${display.id}', 'next')" title="Next">&#9654;</button>
+                    <button class="btn btn-small btn-secondary" onclick="sendControlToDisplay('${display.id}', 'refresh')" title="Refresh">&#8635;</button>
+                </div>
+            </div>
+        `;
+    }).join('');
+}
+
+async function loadPages() {
+    try {
+        const response = await fetch('/api/pages');
+        pages = await response.json();
+        renderPages();
+    } catch (error) {
+        console.error('Error loading pages:', error);
+    }
+}
+
+async function loadDisplays() {
+    try {
+        const response = await fetch('/api/displays');
+        displays = await response.json();
+        renderDisplays();
+        updateDisplaySelects();
+        updateGlobalPauseButton();
+    } catch (error) {
+        console.error('Error loading displays:', error);
+    }
+}
+
+function renderPages() {
+    pageCount.textContent = `(${pages.length})`;
+
+    if (pages.length === 0) {
+        emptyMessage.style.display = 'block';
+        pagesList.style.display = 'none';
+        return;
+    }
+
+    emptyMessage.style.display = 'none';
+    pagesList.style.display = 'block';
+
+    // Find current page IDs from all displays
+    const currentPageIds = displays.map(d => d.current_page_id);
+
+    pagesList.innerHTML = pages.map(page => {
+        const isCurrent = currentPageIds.includes(page.id);
+        const isImage = page.type === 'image';
+        const thumbnailHtml = isImage && page.thumbnail
+            ? `<img src="${escapeHtml(page.thumbnail)}" alt="">`
+            : `<span class="icon">${isImage ? '&#128444;' : '&#127760;'}</span>`;
+        const displayBadge = page.display_id
+            ? `<span class="page-display-badge" title="Assigned to ${escapeHtml(page.display_id)}">${escapeHtml(page.display_id)}</span>`
+            : `<span class="page-display-badge all" title="Shows on all displays">All</span>`;
+
+        return `
+            <li class="page-item ${isCurrent ? 'current' : ''} ${!page.enabled ? 'disabled' : ''}" data-id="${page.id}">
+                <div class="drag-handle" title="Drag to reorder">&#9776;</div>
+                <div class="page-thumbnail">${thumbnailHtml}</div>
+                <div class="page-info">
+                    <div class="page-name">
+                        ${escapeHtml(page.name || 'Unnamed')}
+                        <span class="page-type-badge ${isImage ? 'image' : ''}">${isImage ? 'Image' : 'URL'}</span>
+                        ${displayBadge}
+                    </div>
+                    <div class="page-url" title="${escapeHtml(page.url || '')}">${escapeHtml(page.url || '')}</div>
+                </div>
+                <div class="page-duration">${page.duration}s</div>
+                <div class="page-actions">
+                    <button class="btn btn-small btn-secondary" onclick="goToPage(${page.id})" title="Go to this page">Go</button>
+                    <button class="btn btn-small btn-secondary" onclick="editPage(${page.id})" title="Edit">Edit</button>
+                    <button class="btn btn-small btn-danger" onclick="deletePage(${page.id})" title="Delete">Delete</button>
+                </div>
+            </li>
+        `;
+    }).join('');
+
+    // Initialize sortable
+    if (sortable) {
+        sortable.destroy();
+    }
+
+    sortable = new Sortable(pagesList, {
+        animation: 150,
+        handle: '.drag-handle',
+        ghostClass: 'sortable-ghost',
+        chosenClass: 'sortable-chosen',
+        onEnd: async (evt) => {
+            const order = Array.from(pagesList.children).map(el => parseInt(el.dataset.id));
+            try {
+                await fetch('/api/pages/reorder', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ order })
+                });
+            } catch (error) {
+                console.error('Error reordering:', error);
+                loadPages();
+            }
+        }
+    });
+}
+
+function escapeHtml(text) {
+    if (!text) return '';
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
+// Control handlers
+btnPrev.addEventListener('click', () => sendControl('prev'));
+btnNext.addEventListener('click', () => sendControl('next'));
+btnRefresh.addEventListener('click', () => sendControl('refresh'));
+
+btnPause.addEventListener('click', () => {
+    // Check if any display is playing
+    const anyPlaying = displays.some(d => !d.paused);
+    sendControl(anyPlaying ? 'pause' : 'resume');
+});
+
+function updateGlobalPauseButton() {
+    const anyPlaying = displays.some(d => !d.paused);
+    if (anyPlaying) {
+        pauseIcon.innerHTML = '&#10074;&#10074;';
+        pauseText.textContent = 'Pause All';
+        btnPause.classList.remove('btn-success');
+        btnPause.classList.add('btn-primary');
+    } else {
+        pauseIcon.innerHTML = '&#9654;';
+        pauseText.textContent = 'Resume All';
+        btnPause.classList.remove('btn-primary');
+        btnPause.classList.add('btn-success');
+    }
+}
+
+// Login mode handlers
+const btnLoginMode = document.getElementById('btnLoginMode');
+const btnExitLoginMode = document.getElementById('btnExitLoginMode');
+const loginModeHelp = document.getElementById('loginModeHelp');
+
+btnLoginMode.addEventListener('click', () => {
+    sendControl('login_mode');
+    loginModeHelp.style.display = 'block';
+    btnLoginMode.style.display = 'none';
+});
+
+btnExitLoginMode.addEventListener('click', () => {
+    sendControl('exit_login_mode');
+    loginModeHelp.style.display = 'none';
+    btnLoginMode.style.display = 'inline-flex';
+});
+
+// Admin mode handlers
+const btnAdminMode = document.getElementById('btnAdminMode');
+const btnExitAdminMode = document.getElementById('btnExitAdminMode');
+const adminModeHelp = document.getElementById('adminModeHelp');
+
+btnAdminMode.addEventListener('click', () => {
+    sendControl('admin_mode');
+    adminModeHelp.style.display = 'block';
+    btnAdminMode.style.display = 'none';
+});
+
+btnExitAdminMode.addEventListener('click', () => {
+    sendControl('exit_admin_mode');
+    adminModeHelp.style.display = 'none';
+    btnAdminMode.style.display = 'inline-flex';
+});
+
+async function sendControl(action, data = {}) {
+    try {
+        await fetch('/api/control', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action, ...data })
+        });
+    } catch (error) {
+        console.error('Error sending control:', error);
+    }
+}
+
+async function sendControlToDisplay(displayId, action) {
+    try {
+        await fetch('/api/control', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action, display_id: displayId })
+        });
+    } catch (error) {
+        console.error('Error sending control:', error);
+    }
+}
+
+function goToPage(pageId) {
+    sendControl('goto', { page_id: pageId });
+}
+
+// Tabs
+document.querySelectorAll('.tab-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+        const tab = btn.dataset.tab;
+
+        // Update tab buttons
+        document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+
+        // Update tab content
+        document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+        document.querySelector(`.tab-content[data-tab="${tab}"]`).classList.add('active');
+    });
+});
+
+// Refresh checkbox toggle handlers
+document.getElementById('newRefresh').addEventListener('change', (e) => {
+    document.getElementById('newRefreshIntervalGroup').style.display = e.target.checked ? 'block' : 'none';
+});
+
+document.getElementById('imageRefresh').addEventListener('change', (e) => {
+    document.getElementById('imageRefreshIntervalGroup').style.display = e.target.checked ? 'block' : 'none';
+});
+
+document.getElementById('editRefresh').addEventListener('change', (e) => {
+    document.getElementById('editRefreshIntervalGroup').style.display = e.target.checked ? 'block' : 'none';
+});
+
+// Add page form
+addPageForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+
+    const url = document.getElementById('newUrl').value.trim();
+    const name = document.getElementById('newName').value.trim();
+    const duration = parseInt(document.getElementById('newDuration').value) || 30;
+    const display_id = document.getElementById('newDisplayId').value || null;
+    const refresh = document.getElementById('newRefresh').checked;
+    const refresh_interval = parseInt(document.getElementById('newRefreshInterval').value) || 1;
+
+    if (!url) return;
+
+    try {
+        await fetch('/api/pages', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ url, name, duration, display_id, refresh, refresh_interval })
+        });
+
+        // Reset form
+        document.getElementById('newUrl').value = '';
+        document.getElementById('newName').value = '';
+        document.getElementById('newDuration').value = '30';
+        document.getElementById('newDisplayId').value = '';
+        document.getElementById('newRefresh').checked = false;
+        document.getElementById('newRefreshInterval').value = '1';
+        document.getElementById('newRefreshIntervalGroup').style.display = 'none';
+
+        loadPages();
+    } catch (error) {
+        console.error('Error adding page:', error);
+        alert('Failed to add page');
+    }
+});
+
+// Image upload
+document.getElementById('imageFile').addEventListener('change', (e) => {
+    const file = e.target.files[0];
+    if (file) {
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            filePreview.innerHTML = `<img src="${e.target.result}" alt="Preview">`;
+        };
+        reader.readAsDataURL(file);
+
+        // Auto-fill name if empty
+        const nameInput = document.getElementById('imageName');
+        if (!nameInput.value) {
+            nameInput.value = file.name.replace(/\.[^/.]+$/, '');
+        }
+    } else {
+        filePreview.innerHTML = '';
+    }
+});
+
+uploadImageForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+
+    const fileInput = document.getElementById('imageFile');
+    const file = fileInput.files[0];
+
+    if (!file) {
+        alert('Please select an image file');
+        return;
+    }
+
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('name', document.getElementById('imageName').value.trim() || file.name);
+    formData.append('duration', document.getElementById('imageDuration').value || '30');
+    formData.append('display_id', document.getElementById('imageDisplayId').value || '');
+    formData.append('refresh', document.getElementById('imageRefresh').checked ? 'true' : 'false');
+    formData.append('refresh_interval', document.getElementById('imageRefreshInterval').value || '1');
+
+    try {
+        const response = await fetch('/api/images', {
+            method: 'POST',
+            body: formData
+        });
+
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.error || 'Upload failed');
+        }
+
+        // Reset form
+        fileInput.value = '';
+        document.getElementById('imageName').value = '';
+        document.getElementById('imageDuration').value = '30';
+        document.getElementById('imageDisplayId').value = '';
+        document.getElementById('imageRefresh').checked = false;
+        document.getElementById('imageRefreshInterval').value = '1';
+        document.getElementById('imageRefreshIntervalGroup').style.display = 'none';
+        filePreview.innerHTML = '';
+
+        loadPages();
+    } catch (error) {
+        console.error('Error uploading image:', error);
+        alert('Failed to upload image: ' + error.message);
+    }
+});
+
+// Edit page
+function editPage(pageId) {
+    const page = pages.find(p => p.id === pageId);
+    if (!page) return;
+
+    const editUrlEl = document.getElementById('editUrl');
+    document.getElementById('editId').value = page.id;
+    editUrlEl.value = page.url || '';
+    document.getElementById('editName').value = page.name || '';
+    document.getElementById('editDuration').value = page.duration;
+    document.getElementById('editDisplayId').value = page.display_id || '';
+    document.getElementById('editEnabled').checked = page.enabled;
+    document.getElementById('editRefresh').checked = page.refresh;
+    document.getElementById('editRefreshInterval').value = page.refresh_interval || 1;
+    document.getElementById('editRefreshIntervalGroup').style.display = page.refresh ? 'block' : 'none';
+
+    if (page.type === 'image') {
+        editUrlEl.disabled = true;
+        editUrlEl.removeAttribute('required');
+    } else {
+        editUrlEl.disabled = false;
+        editUrlEl.setAttribute('required', 'required');
+    }
+
+    // Update the display select options before showing
+    updateDisplaySelects();
+
+    // Set the display value again after updating options
+    setTimeout(() => {
+        document.getElementById('editDisplayId').value = page.display_id || '';
+    }, 0);
+
+    editModal.classList.add('show');
+}
+
+function closeEditModal() {
+    editModal.classList.remove('show');
+}
+
+document.getElementById('closeModal').addEventListener('click', closeEditModal);
+document.getElementById('cancelEdit').addEventListener('click', closeEditModal);
+
+editModal.addEventListener('click', (e) => {
+    if (e.target === editModal) {
+        closeEditModal();
+    }
+});
+
+editPageForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+
+    const id = document.getElementById('editId').value;
+    const editUrlEl = document.getElementById('editUrl');
+    const data = {
+        name: document.getElementById('editName').value.trim(),
+        duration: parseInt(document.getElementById('editDuration').value) || 30,
+        display_id: document.getElementById('editDisplayId').value || null,
+        enabled: document.getElementById('editEnabled').checked,
+        refresh: document.getElementById('editRefresh').checked,
+        refresh_interval: parseInt(document.getElementById('editRefreshInterval').value) || 1
+    };
+    if (!editUrlEl.disabled) {
+        data.url = editUrlEl.value.trim();
+    }
+
+    try {
+        await fetch(`/api/pages/${id}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(data)
+        });
+
+        closeEditModal();
+        loadPages();
+    } catch (error) {
+        console.error('Error updating page:', error);
+        alert('Failed to update page');
+    }
+});
+
+// Settings modal
+btnSettings.addEventListener('click', () => {
+    document.getElementById('settingsHostname').value = systemInfo.hostname;
+    document.getElementById('settingsIp').value = systemInfo.ip;
+    settingsModal.classList.add('show');
+});
+
+function closeSettingsModal() {
+    settingsModal.classList.remove('show');
+}
+
+document.getElementById('closeSettings').addEventListener('click', closeSettingsModal);
+document.getElementById('cancelSettings').addEventListener('click', closeSettingsModal);
+document.getElementById('btnReboot').addEventListener('click', async () => {
+    if (!confirm('Reboot the Pi now? This will temporarily disconnect all displays.')) {
+        return;
+    }
+
+    try {
+        const response = await fetch('/api/system/reboot', { method: 'POST' });
+        const result = await response.json();
+        if (!response.ok) {
+            throw new Error(result.error || 'Failed to reboot');
+        }
+        alert(result.message || 'Reboot initiated');
+    } catch (error) {
+        console.error('Error rebooting:', error);
+        alert('Failed to reboot: ' + error.message);
+    }
+});
+
+settingsModal.addEventListener('click', (e) => {
+    if (e.target === settingsModal) {
+        closeSettingsModal();
+    }
+});
+
+settingsForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+
+    const newHostname = document.getElementById('settingsHostname').value.trim();
+
+    if (!newHostname) {
+        alert('Hostname cannot be empty');
+        return;
+    }
+
+    if (newHostname === systemInfo.hostname) {
+        closeSettingsModal();
+        return;
+    }
+
+    try {
+        const response = await fetch('/api/system/hostname', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ hostname: newHostname })
+        });
+
+        const result = await response.json();
+
+        if (!response.ok) {
+            throw new Error(result.error || 'Failed to change hostname');
+        }
+
+        alert(result.message || 'Hostname changed successfully');
+        closeSettingsModal();
+        loadSystemInfo();
+    } catch (error) {
+        console.error('Error changing hostname:', error);
+        alert('Failed to change hostname: ' + error.message);
+    }
+});
+
+// Delete page
+async function deletePage(pageId) {
+    if (!confirm('Are you sure you want to delete this page?')) {
+        return;
+    }
+
+    try {
+        await fetch(`/api/pages/${pageId}`, {
+            method: 'DELETE'
+        });
+        loadPages();
+    } catch (error) {
+        console.error('Error deleting page:', error);
+        alert('Failed to delete page');
+    }
+}
+
+// Copy install command
+copyInstallCmd.addEventListener('click', () => {
+    const cmd = `curl -sSL http://${systemInfo.ip}:5000/install.sh | sudo bash -s -- client ${systemInfo.ip}`;
+    navigator.clipboard.writeText(cmd).then(() => {
+        copyInstallCmd.textContent = 'Copied!';
+        setTimeout(() => {
+            copyInstallCmd.textContent = 'Copy';
+        }, 2000);
+    }).catch(() => {
+        alert('Failed to copy. Command: ' + cmd);
+    });
+});
+
+// Restart all displays
+document.getElementById('btnRestartAllDisplays').addEventListener('click', async () => {
+    if (!confirm('Restart the kiosk service on all connected displays?')) {
+        return;
+    }
+
+    try {
+        const response = await fetch('/api/system/restart-displays', { method: 'POST' });
+        const result = await response.json();
+        if (!response.ok) {
+            throw new Error(result.error || 'Failed to restart displays');
+        }
+        alert(result.message || 'Restart command sent');
+    } catch (error) {
+        console.error('Error restarting displays:', error);
+        alert('Failed to restart displays: ' + error.message);
+    }
+});
+
+// Reboot all Pis
+document.getElementById('btnRebootAll').addEventListener('click', async () => {
+    if (!confirm('Reboot ALL Pis including this master? This will disconnect everything temporarily.')) {
+        return;
+    }
+
+    try {
+        const response = await fetch('/api/system/reboot-all', { method: 'POST' });
+        const result = await response.json();
+        if (!response.ok) {
+            throw new Error(result.error || 'Failed to reboot');
+        }
+        alert(result.message || 'Reboot command sent');
+    } catch (error) {
+        console.error('Error rebooting:', error);
+        alert('Failed to reboot: ' + error.message);
+    }
+});
+
+// WiFi form
+const wifiForm = document.getElementById('wifiForm');
+const wifiStatus = document.getElementById('wifiStatus');
+const btnUpdateAllDisplays = document.getElementById('btnUpdateAllDisplays');
+
+socket.on('update_result', (data) => {
+    if (!wifiStatus) return;
+    const name = data?.hostname || 'Unknown';
+    const ok = data?.success;
+    const msg = ok ? 'Updated' : (data?.error || 'Update failed');
+    const color = ok ? '#22c55e' : '#ef4444';
+    wifiStatus.style.display = 'block';
+    wifiStatus.innerHTML += `<div style="color: ${color}; margin-top: 6px;">${escapeHtml(name)}: ${escapeHtml(msg)}</div>`;
+});
+
+socket.on('wifi_result', (data) => {
+    if (!wifiStatus) return;
+    const name = data?.hostname || 'Unknown';
+    const ok = data?.success;
+    const msg = ok ? (data?.message || 'OK') : (data?.error || 'Failed');
+    const color = ok ? '#22c55e' : '#ef4444';
+    wifiStatus.style.display = 'block';
+    wifiStatus.innerHTML += `<div style="color: ${color}; margin-top: 6px;">${escapeHtml(name)}: ${escapeHtml(msg)}</div>`;
+});
+
+wifiForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+
+    const ssid = document.getElementById('wifiSsid').value.trim();
+    const password = document.getElementById('wifiPassword').value;
+    const hidden = document.getElementById('wifiHidden').checked;
+
+    if (!ssid) {
+        alert('Please enter a WiFi network name');
+        return;
+    }
+
+    wifiStatus.style.display = 'block';
+    wifiStatus.innerHTML = '<span style="color: #fbbf24;">Pushing WiFi credentials...</span>';
+
+    try {
+        const response = await fetch('/api/system/wifi', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ssid, password, hidden })
+        });
+
+        const result = await response.json();
+
+        if (!response.ok) {
+            throw new Error(result.error || 'Failed to push WiFi credentials');
+        }
+
+        wifiStatus.innerHTML = `<span style="color: #22c55e;">${result.message}</span>`;
+
+        // Clear form
+        document.getElementById('wifiSsid').value = '';
+        document.getElementById('wifiPassword').value = '';
+        document.getElementById('wifiHidden').checked = false;
+
+        // Hide status after 5 seconds
+        setTimeout(() => {
+            wifiStatus.style.display = 'none';
+        }, 5000);
+    } catch (error) {
+        console.error('Error pushing WiFi:', error);
+        wifiStatus.innerHTML = `<span style="color: #ef4444;">Error: ${error.message}</span>`;
+    }
+});
+
+btnUpdateAllDisplays?.addEventListener('click', async () => {
+    if (!confirm('Push the latest code to all connected displays?')) return;
+    if (!wifiStatus) return;
+    wifiStatus.style.display = 'block';
+    wifiStatus.innerHTML = '<span style="color: #fbbf24;">Pushing update to displays...</span>';
+    try {
+        const response = await fetch('/api/system/update', { method: 'POST' });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || 'Update failed');
+        wifiStatus.innerHTML += `<div style="color: #22c55e; margin-top: 6px;">${escapeHtml(result.message || 'Update sent')}</div>`;
+    } catch (error) {
+        wifiStatus.innerHTML = `<span style="color: #ef4444;">Error: ${escapeHtml(error.message)}</span>`;
+    }
+});
+
+// Keyboard shortcuts
+document.addEventListener('keydown', (e) => {
+    // Don't trigger shortcuts when typing in inputs
+    if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+
+    switch(e.key) {
+        case 'ArrowLeft':
+            sendControl('prev');
+            break;
+        case 'ArrowRight':
+            sendControl('next');
+            break;
+        case ' ':
+            e.preventDefault();
+            const anyPlaying = displays.some(d => !d.paused);
+            sendControl(anyPlaying ? 'pause' : 'resume');
+            break;
+        case 'r':
+            sendControl('refresh');
+            break;
+        case 'Escape':
+            closeEditModal();
+            closeSettingsModal();
+            break;
+    }
+});
+
+// Initial load
+loadPages();
+loadSystemInfo();

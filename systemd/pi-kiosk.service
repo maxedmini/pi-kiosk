@@ -1,0 +1,19 @@
+[Unit]
+Description=Pi Kiosk Display
+After=graphical.target pi-kiosk-server.service
+Wants=pi-kiosk-server.service
+
+[Service]
+Type=simple
+User=pi
+Environment=DISPLAY=:0
+Environment=XAUTHORITY=/home/pi/.Xauthority
+WorkingDirectory=/opt/pi-kiosk
+ExecStartPre=/bin/sleep 5
+ExecStart=/opt/pi-kiosk/venv/bin/python kiosk.py
+Restart=always
+RestartSec=10
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=graphical.target
