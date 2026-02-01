@@ -24,6 +24,7 @@ from flask_socketio import SocketIO, emit
 # Configuration
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATABASE = os.path.join(BASE_DIR, 'pages.db')
+SETTINGS_FILE = os.path.join(BASE_DIR, 'settings.json')
 UPLOAD_FOLDER = os.path.join(BASE_DIR, 'uploads')
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp'}
 MAX_CONTENT_LENGTH = 16 * 1024 * 1024  # 16MB max upload
@@ -42,6 +43,32 @@ socketio = SocketIO(app, cors_allowed_origins="*", async_mode='gevent')
 # Connected displays (in-memory tracking)
 # Key: socket session ID, Value: display info dict
 connected_displays = {}
+
+
+def load_settings():
+    """Load server settings from disk."""
+    if not os.path.exists(SETTINGS_FILE):
+        return {'sync_enabled': True}
+    try:
+        with open(SETTINGS_FILE, 'r') as f:
+            data = json.load(f)
+        if isinstance(data, dict):
+            return {**{'sync_enabled': True}, **data}
+    except Exception:
+        pass
+    return {'sync_enabled': True}
+
+
+def save_settings(settings):
+    """Persist server settings to disk."""
+    try:
+        with open(SETTINGS_FILE, 'w') as f:
+            json.dump(settings, f)
+    except Exception:
+        pass
+
+
+SETTINGS = load_settings()
 
 
 def serialize_displays():
@@ -979,8 +1006,25 @@ def sync_displays():
     sync_at = time.time() + max(0, delay_ms) / 1000.0
     if data.get('reload'):
         socketio.emit('pages_updated', {'action': 'sync'})
-    socketio.emit('sync', {'sync_at': sync_at, 'page_id': page_id})
+    socketio.emit('sync', {
+        'sync_at': sync_at,
+        'page_id': page_id,
+        'sync_enabled': SETTINGS.get('sync_enabled', True)
+    })
     return jsonify({'success': True, 'sync_at': sync_at})
+
+
+@app.route('/api/settings/sync', methods=['GET', 'POST'])
+def sync_settings():
+    """Get or set sync mode."""
+    if request.method == 'GET':
+        return jsonify({'sync_enabled': SETTINGS.get('sync_enabled', True)})
+
+    data = request.get_json(silent=True) or {}
+    sync_enabled = bool(data.get('sync_enabled', True))
+    SETTINGS['sync_enabled'] = sync_enabled
+    save_settings(SETTINGS)
+    return jsonify({'sync_enabled': SETTINGS.get('sync_enabled', True)})
 
 
 # WebSocket Events
@@ -1123,6 +1167,11 @@ def handle_request_pages(data=None):
         }]
 
     emit('pages_list', result)
+    emit('pages_sync', {
+        'pages': result,
+        'server_time': time.time(),
+        'sync_enabled': SETTINGS.get('sync_enabled', True)
+    })
 
 
 def schedule_checker_thread():

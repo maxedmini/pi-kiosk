@@ -729,6 +729,7 @@ editPageForm.addEventListener('submit', async (e) => {
 btnSettings.addEventListener('click', () => {
     document.getElementById('settingsHostname').value = systemInfo.hostname;
     document.getElementById('settingsIp').value = systemInfo.ip;
+    loadSyncSetting();
     settingsModal.classList.add('show');
 });
 
@@ -766,38 +767,52 @@ settingsForm.addEventListener('submit', async (e) => {
     e.preventDefault();
 
     const newHostname = document.getElementById('settingsHostname').value.trim();
+    const syncEnabled = document.getElementById('settingsSyncEnabled').checked;
 
     if (!newHostname) {
         alert('Hostname cannot be empty');
         return;
     }
 
-    if (newHostname === systemInfo.hostname) {
-        closeSettingsModal();
-        return;
-    }
-
     try {
-        const response = await fetch('/api/system/hostname', {
-            method: 'PUT',
+        await fetch('/api/settings/sync', {
+            method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ hostname: newHostname })
+            body: JSON.stringify({ sync_enabled: syncEnabled })
         });
 
-        const result = await response.json();
+        if (newHostname !== systemInfo.hostname) {
+            const response = await fetch('/api/system/hostname', {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ hostname: newHostname })
+            });
 
-        if (!response.ok) {
-            throw new Error(result.error || 'Failed to change hostname');
+            const result = await response.json();
+
+            if (!response.ok) {
+                throw new Error(result.error || 'Failed to change hostname');
+            }
+
+            alert(result.message || 'Hostname changed successfully');
+            loadSystemInfo();
         }
-
-        alert(result.message || 'Hostname changed successfully');
         closeSettingsModal();
-        loadSystemInfo();
     } catch (error) {
         console.error('Error changing hostname:', error);
         alert('Failed to change hostname: ' + error.message);
     }
 });
+
+async function loadSyncSetting() {
+    try {
+        const response = await fetch('/api/settings/sync');
+        const data = await response.json();
+        document.getElementById('settingsSyncEnabled').checked = !!data.sync_enabled;
+    } catch (error) {
+        console.error('Error loading sync setting:', error);
+    }
+}
 
 // Toggle page enabled/disabled
 async function togglePage(pageId, enabled) {

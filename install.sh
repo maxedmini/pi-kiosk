@@ -140,6 +140,9 @@ browser_ready = False
 sync_target_page_id = None
 sync_at = None
 reset_timer = False
+sync_enabled = True
+sync_server_time = None
+sync_received_at = None
 paused = False
 running = True
 server_url = DEFAULT_SERVER_URL
@@ -248,7 +251,7 @@ def get_enabled_urls():
 
 def switcher_thread():
     """Background thread that rotates tabs."""
-    global current_index, page_switch_counts, browser_ready, sync_target_page_id, sync_at, reset_timer
+    global current_index, page_switch_counts, browser_ready, sync_target_page_id, sync_at, reset_timer, sync_enabled, sync_server_time, sync_received_at
     log('Switcher started')
     while running:
         if paused and browser_ready and sync_at is not None:
@@ -261,6 +264,14 @@ def switcher_thread():
                 send_status()
         if paused or not pages or not browser_ready:
             time.sleep(0.5); continue
+        if sync_enabled and sync_server_time is not None and sync_received_at is not None:
+            now = sync_server_time + (time.time() - sync_received_at)
+            idx, remaining = compute_sync_target(now)
+            if idx is not None and idx != current_index:
+                goto_page_index(idx)
+            sleep_for = max(0.05, min(0.5, remaining))
+            time.sleep(sleep_for)
+            continue
         page = get_current_page()
         if not page: time.sleep(1); continue
         duration = page.get('duration', 30)
@@ -307,10 +318,28 @@ def disconnect(): log('Disconnected')
 @sio.on('pages_list')
 def on_pages_list(data):
     global pages, current_index
-    log(f'Received {len(data)} pages')
-    pages = data
+    if isinstance(data, list):
+        log(f'Received {len(data)} pages (legacy)')
+        pages = data
+        if not sync_enabled:
+            current_index = 0
+            urls = get_enabled_urls()
+            launch_browser_with_tabs(urls)
+            if pages:
+                send_status()
+            else:
+                log('No pages configured, showing default image')
+
+@sio.on('pages_sync')
+def on_pages_sync(data):
+    global pages, current_index, sync_enabled, sync_server_time, sync_received_at
+    if not data: return
+    pages = data.get('pages', [])
+    sync_enabled = bool(data.get('sync_enabled', True))
+    sync_server_time = data.get('server_time')
+    sync_received_at = time.time()
+    log(f'Received {len(pages)} pages (sync mode={sync_enabled})')
     current_index = 0
-    # Get URLs and launch browser (get_enabled_urls handles fallback)
     urls = get_enabled_urls()
     launch_browser_with_tabs(urls)
     if pages:
@@ -323,8 +352,11 @@ def on_pages_updated(data): sio.emit('request_pages', {'hostname': get_hostname(
 
 @sio.on('sync')
 def on_sync(data):
-    global paused, sync_target_page_id, sync_at
+    global paused, sync_target_page_id, sync_at, sync_enabled
     if not data: return
+    if data.get('sync_enabled') is False:
+        sync_enabled = False
+        return
     sync_at_value = data.get('sync_at')
     page_id = data.get('page_id')
     try: sync_at_value = float(sync_at_value)
@@ -355,6 +387,39 @@ def goto_page_id(page_id):
         time.sleep(0.2)
     reset_timer = True
     send_status()
+
+def goto_page_index(idx):
+    global current_index, reset_timer
+    if not pages or idx is None: return
+    if idx == current_index:
+        send_status(); return
+    if 1 <= idx+1 <= 9:
+        send_keystroke(f'ctrl+{idx+1}')
+        current_index = idx
+        reset_timer = True
+        send_status()
+        return
+    while current_index != idx:
+        send_keystroke('ctrl+Tab')
+        current_index = (current_index + 1) % len(pages)
+        time.sleep(0.2)
+    reset_timer = True
+    send_status()
+
+def compute_sync_target(now_ts):
+    durations = []
+    for p in pages:
+        try: durations.append(int(p.get('duration', 30)))
+        except: durations.append(30)
+    total = sum(durations)
+    if not durations or total <= 0: return None, 1.0
+    offset = now_ts % total
+    acc = 0
+    for i, d in enumerate(durations):
+        if offset < acc + d:
+            return i, (acc + d) - offset
+        acc += d
+    return 0, durations[0]
 
 @sio.on('control')
 def on_control(data):
