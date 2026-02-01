@@ -505,6 +505,7 @@ def switcher_thread():
             continue
 
         duration = page.get('duration', 30)
+        log(f'Starting page: id={page.get(\"id\")} name={page.get(\"name\", \"\")!s} duration={duration}s index={current_index}')
 
         # Wait for duration using a monotonic clock (avoids drift/early exits)
         start = time.monotonic()
@@ -513,6 +514,7 @@ def switcher_thread():
             if elapsed >= duration:
                 break
             time.sleep(min(0.1, duration - elapsed))
+        log(f'Completed page: id={page.get(\"id\")} elapsed={elapsed:.2f}s target={duration}s')
 
         # If still running and not paused, switch to next tab
         if running and not paused and pages:
