@@ -16,6 +16,7 @@ from datetime import datetime
 import shutil
 import io
 import tarfile
+import json
 from werkzeug.utils import secure_filename
 from flask import Flask, render_template, request, jsonify, send_from_directory
 from flask_socketio import SocketIO, emit
@@ -104,6 +105,8 @@ def init_db():
         conn.execute("ALTER TABLE pages ADD COLUMN schedule_start TEXT")
     if 'schedule_end' not in columns:
         conn.execute("ALTER TABLE pages ADD COLUMN schedule_end TEXT")
+    if 'schedule_ranges' not in columns:
+        conn.execute("ALTER TABLE pages ADD COLUMN schedule_ranges TEXT")
 
     conn.commit()
     conn.close()
@@ -116,11 +119,32 @@ def dict_from_row(row):
     return dict(row)
 
 
+def _parse_schedule_ranges(raw_ranges):
+    """Parse schedule ranges JSON into a list of {start,end} dicts."""
+    if not raw_ranges:
+        return []
+    try:
+        ranges = json.loads(raw_ranges)
+    except Exception:
+        return []
+    if not isinstance(ranges, list):
+        return []
+    normalized = []
+    for r in ranges:
+        if not isinstance(r, dict):
+            continue
+        start = r.get('start')
+        end = r.get('end')
+        if isinstance(start, str) and isinstance(end, str) and start and end:
+            normalized.append({'start': start, 'end': end})
+    return normalized
+
+
 def is_page_active_now(page):
     """Check if a page should be displayed at the current time.
 
     Args:
-        page: dict with schedule_enabled, schedule_start, schedule_end
+        page: dict with schedule_enabled, schedule_start, schedule_end, schedule_ranges
 
     Returns:
         True if page should be shown, False otherwise
@@ -129,31 +153,38 @@ def is_page_active_now(page):
     if not page.get('schedule_enabled'):
         return True
 
-    start_str = page.get('schedule_start')
-    end_str = page.get('schedule_end')
-
-    # If missing times, show always
-    if not start_str or not end_str:
-        return True
+    ranges = []
+    raw_ranges = page.get('schedule_ranges')
+    if isinstance(raw_ranges, str) and raw_ranges.strip():
+        ranges = _parse_schedule_ranges(raw_ranges)
+    if not ranges:
+        start_str = page.get('schedule_start')
+        end_str = page.get('schedule_end')
+        if start_str and end_str:
+            ranges = [{'start': start_str, 'end': end_str}]
+        else:
+            return True
 
     try:
         now = datetime.now()
         current_minutes = now.hour * 60 + now.minute
+        for r in ranges:
+            start_parts = r['start'].split(':')
+            start_minutes = int(start_parts[0]) * 60 + int(start_parts[1])
 
-        start_parts = start_str.split(':')
-        start_minutes = int(start_parts[0]) * 60 + int(start_parts[1])
+            end_parts = r['end'].split(':')
+            end_minutes = int(end_parts[0]) * 60 + int(end_parts[1])
 
-        end_parts = end_str.split(':')
-        end_minutes = int(end_parts[0]) * 60 + int(end_parts[1])
-
-        # Normal case: start before end (e.g., 09:00 - 17:00)
-        if start_minutes <= end_minutes:
-            return start_minutes <= current_minutes < end_minutes
-        # Overnight case: end before start (e.g., 23:00 - 06:00)
-        else:
-            return current_minutes >= start_minutes or current_minutes < end_minutes
-
-    except (ValueError, AttributeError):
+            # Normal case: start before end (e.g., 09:00 - 17:00)
+            if start_minutes <= end_minutes:
+                if start_minutes <= current_minutes < end_minutes:
+                    return True
+            # Overnight case: end before start (e.g., 23:00 - 06:00)
+            else:
+                if current_minutes >= start_minutes or current_minutes < end_minutes:
+                    return True
+        return False
+    except (ValueError, AttributeError, KeyError):
         # On parse error, show the page
         return True
 
@@ -361,8 +392,12 @@ def add_page():
     max_pos = conn.execute('SELECT MAX(position) FROM pages').fetchone()[0]
     next_pos = (max_pos or 0) + 1
 
+    schedule_ranges = data.get('schedule_ranges')
+    if isinstance(schedule_ranges, list):
+        schedule_ranges = json.dumps(schedule_ranges)
+
     cursor = conn.execute(
-        'INSERT INTO pages (url, name, duration, position, enabled, type, display_id, refresh, refresh_interval, schedule_enabled, schedule_start, schedule_end) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        'INSERT INTO pages (url, name, duration, position, enabled, type, display_id, refresh, refresh_interval, schedule_enabled, schedule_start, schedule_end, schedule_ranges) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
         (
             data['url'],
             data.get('name', ''),
@@ -375,7 +410,8 @@ def add_page():
             data.get('refresh_interval', 1),
             1 if data.get('schedule_enabled', False) else 0,
             data.get('schedule_start'),
-            data.get('schedule_end')
+            data.get('schedule_end'),
+            schedule_ranges
         )
     )
     conn.commit()
@@ -454,6 +490,12 @@ def update_page(page_id):
     if 'schedule_end' in data:
         updates.append('schedule_end = ?')
         values.append(data['schedule_end'])
+    if 'schedule_ranges' in data:
+        schedule_ranges = data['schedule_ranges']
+        if isinstance(schedule_ranges, list):
+            schedule_ranges = json.dumps(schedule_ranges)
+        updates.append('schedule_ranges = ?')
+        values.append(schedule_ranges)
 
     if updates:
         values.append(page_id)
@@ -611,6 +653,7 @@ def upload_image():
     schedule_enabled = request.form.get('schedule_enabled', '').lower() in ('true', '1', 'yes', 'on')
     schedule_start = request.form.get('schedule_start') or None
     schedule_end = request.form.get('schedule_end') or None
+    schedule_ranges = request.form.get('schedule_ranges') or None
 
     # Add to database
     conn = get_db()
@@ -619,7 +662,7 @@ def upload_image():
         next_pos = (max_pos or 0) + 1
 
         cursor = conn.execute(
-            'INSERT INTO pages (url, name, duration, position, enabled, type, filename, display_id, refresh, refresh_interval, schedule_enabled, schedule_start, schedule_end) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+            'INSERT INTO pages (url, name, duration, position, enabled, type, filename, display_id, refresh, refresh_interval, schedule_enabled, schedule_start, schedule_end, schedule_ranges) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
             (
                 f"/view/image/{filename}",
                 name,
@@ -633,7 +676,8 @@ def upload_image():
                 max(1, refresh_interval),
                 1 if schedule_enabled else 0,
                 schedule_start,
-                schedule_end
+                schedule_end,
+                schedule_ranges
             )
         )
 
@@ -1072,7 +1116,7 @@ def schedule_checker_thread():
         try:
             conn = get_db()
             pages = conn.execute(
-                'SELECT id, schedule_enabled, schedule_start, schedule_end FROM pages WHERE enabled = 1'
+                'SELECT id, schedule_enabled, schedule_start, schedule_end, schedule_ranges FROM pages WHERE enabled = 1'
             ).fetchall()
             conn.close()
 

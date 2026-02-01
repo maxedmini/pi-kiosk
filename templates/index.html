@@ -125,11 +125,15 @@
                         </label>
                     </div>
                     <div class="form-group schedule-fields" id="newScheduleFields" style="display:none;">
-                        <div class="schedule-row">
-                            <input type="time" id="newScheduleStart" value="09:00" title="Start time">
-                            <span>to</span>
-                            <input type="time" id="newScheduleEnd" value="17:00" title="End time">
+                        <div class="schedule-rows" id="newScheduleRows">
+                            <div class="schedule-row">
+                                <input type="time" class="schedule-start" value="09:00" title="Start time">
+                                <span>to</span>
+                                <input type="time" class="schedule-end" value="17:00" title="End time">
+                                <button type="button" class="btn btn-small btn-secondary remove-schedule" title="Remove time">×</button>
+                            </div>
                         </div>
+                        <button type="button" class="btn btn-small btn-secondary add-schedule" data-target="newScheduleRows">Add time</button>
                     </div>
                     <button type="submit" class="btn btn-success">Add Page</button>
                 </div>
@@ -172,11 +176,15 @@
                         </label>
                     </div>
                     <div class="form-group schedule-fields" id="imageScheduleFields" style="display:none;">
-                        <div class="schedule-row">
-                            <input type="time" id="imageScheduleStart" value="09:00" title="Start time">
-                            <span>to</span>
-                            <input type="time" id="imageScheduleEnd" value="17:00" title="End time">
+                        <div class="schedule-rows" id="imageScheduleRows">
+                            <div class="schedule-row">
+                                <input type="time" class="schedule-start" value="09:00" title="Start time">
+                                <span>to</span>
+                                <input type="time" class="schedule-end" value="17:00" title="End time">
+                                <button type="button" class="btn btn-small btn-secondary remove-schedule" title="Remove time">×</button>
+                            </div>
                         </div>
+                        <button type="button" class="btn btn-small btn-secondary add-schedule" data-target="imageScheduleRows">Add time</button>
                     </div>
                     <button type="submit" class="btn btn-success">Upload Image</button>
                 </div>
@@ -240,11 +248,15 @@
                     </label>
                 </div>
                 <div class="form-group schedule-fields" id="editScheduleFields" style="display:none;">
-                    <div class="schedule-row">
-                        <input type="time" id="editScheduleStart" value="09:00">
-                        <span>to</span>
-                        <input type="time" id="editScheduleEnd" value="17:00">
+                    <div class="schedule-rows" id="editScheduleRows">
+                        <div class="schedule-row">
+                            <input type="time" class="schedule-start" value="09:00">
+                            <span>to</span>
+                            <input type="time" class="schedule-end" value="17:00">
+                            <button type="button" class="btn btn-small btn-secondary remove-schedule" title="Remove time">×</button>
+                        </div>
                     </div>
+                    <button type="button" class="btn btn-small btn-secondary add-schedule" data-target="editScheduleRows">Add time</button>
                     <small class="schedule-help">For overnight schedules (e.g., 11pm-6am), set start after end.</small>
                 </div>
                 <div class="modal-actions">

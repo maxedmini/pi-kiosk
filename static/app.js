@@ -81,6 +81,85 @@ function absoluteUrl(url) {
     return `${base}${url.startsWith('/') ? '' : '/'}${url}`;
 }
 
+function normalizeScheduleRanges(page) {
+    let ranges = [];
+    if (page && page.schedule_ranges) {
+        try {
+            const parsed = typeof page.schedule_ranges === 'string'
+                ? JSON.parse(page.schedule_ranges)
+                : page.schedule_ranges;
+            if (Array.isArray(parsed)) {
+                ranges = parsed.filter(r => r && r.start && r.end);
+            }
+        } catch (e) {
+            ranges = [];
+        }
+    }
+    if (!ranges.length && page && page.schedule_start && page.schedule_end) {
+        ranges = [{ start: page.schedule_start, end: page.schedule_end }];
+    }
+    return ranges;
+}
+
+function formatScheduleRanges(page) {
+    if (!page || !page.schedule_enabled) return '';
+    const ranges = normalizeScheduleRanges(page);
+    if (!ranges.length) return '';
+    return ranges.map(r => `${r.start}-${r.end}`).join(', ');
+}
+
+function addScheduleRow(container, start, end) {
+    if (!container) return;
+    const row = document.createElement('div');
+    row.className = 'schedule-row';
+    row.innerHTML = `
+        <input type="time" class="schedule-start" value="${start}">
+        <span>to</span>
+        <input type="time" class="schedule-end" value="${end}">
+        <button type="button" class="btn btn-small btn-secondary remove-schedule" title="Remove time">×</button>
+    `;
+    container.appendChild(row);
+}
+
+function setScheduleRows(containerId, ranges) {
+    const container = document.getElementById(containerId);
+    if (!container) return;
+    container.innerHTML = '';
+    const list = ranges && ranges.length ? ranges : [{ start: '09:00', end: '17:00' }];
+    list.forEach(r => addScheduleRow(container, r.start, r.end));
+}
+
+function collectScheduleRanges(containerId) {
+    const container = document.getElementById(containerId);
+    if (!container) return [];
+    const rows = Array.from(container.querySelectorAll('.schedule-row'));
+    return rows.map(row => {
+        const start = row.querySelector('.schedule-start')?.value;
+        const end = row.querySelector('.schedule-end')?.value;
+        return start && end ? { start, end } : null;
+    }).filter(Boolean);
+}
+
+document.addEventListener('click', (e) => {
+    const addBtn = e.target.closest('.add-schedule');
+    if (addBtn) {
+        const targetId = addBtn.getAttribute('data-target');
+        addScheduleRow(document.getElementById(targetId), '09:00', '17:00');
+        return;
+    }
+    const removeBtn = e.target.closest('.remove-schedule');
+    if (removeBtn) {
+        const row = removeBtn.closest('.schedule-row');
+        const container = row?.parentElement;
+        if (row && container) {
+            container.removeChild(row);
+            if (!container.children.length) {
+                addScheduleRow(container, '09:00', '17:00');
+            }
+        }
+    }
+});
+
 function updateDisplaySelects() {
     // Update all display select dropdowns
     const selects = [
@@ -212,8 +291,9 @@ function renderPages() {
         const displayBadge = page.display_id
             ? `<span class="page-display-badge" title="Assigned to ${escapeHtml(page.display_id)}">${escapeHtml(page.display_id)}</span>`
             : `<span class="page-display-badge all" title="Shows on all displays">All</span>`;
-        const scheduleBadge = page.schedule_enabled
-            ? `<span class="page-schedule-badge ${page.is_active ? 'active' : 'inactive'}" title="Scheduled: ${escapeHtml(page.schedule_start || '')} - ${escapeHtml(page.schedule_end || '')}">${page.schedule_start}-${page.schedule_end}</span>`
+        const scheduleLabel = formatScheduleRanges(page);
+        const scheduleBadge = page.schedule_enabled && scheduleLabel
+            ? `<span class="page-schedule-badge ${page.is_active ? 'active' : 'inactive'}" title="Scheduled: ${escapeHtml(scheduleLabel)}">${escapeHtml(scheduleLabel)}</span>`
             : '';
 
         return `
@@ -397,14 +477,23 @@ document.getElementById('editRefresh').addEventListener('change', (e) => {
 // Schedule checkbox toggle handlers
 document.getElementById('newScheduleEnabled').addEventListener('change', (e) => {
     document.getElementById('newScheduleFields').style.display = e.target.checked ? 'flex' : 'none';
+    if (e.target.checked) {
+        setScheduleRows('newScheduleRows', collectScheduleRanges('newScheduleRows'));
+    }
 });
 
 document.getElementById('imageScheduleEnabled').addEventListener('change', (e) => {
     document.getElementById('imageScheduleFields').style.display = e.target.checked ? 'flex' : 'none';
+    if (e.target.checked) {
+        setScheduleRows('imageScheduleRows', collectScheduleRanges('imageScheduleRows'));
+    }
 });
 
 document.getElementById('editScheduleEnabled').addEventListener('change', (e) => {
     document.getElementById('editScheduleFields').style.display = e.target.checked ? 'flex' : 'none';
+    if (e.target.checked) {
+        setScheduleRows('editScheduleRows', collectScheduleRanges('editScheduleRows'));
+    }
 });
 
 // Add page form
@@ -418,8 +507,10 @@ addPageForm.addEventListener('submit', async (e) => {
     const refresh = document.getElementById('newRefresh').checked;
     const refresh_interval = parseInt(document.getElementById('newRefreshInterval').value) || 1;
     const schedule_enabled = document.getElementById('newScheduleEnabled').checked;
-    const schedule_start = document.getElementById('newScheduleStart').value || null;
-    const schedule_end = document.getElementById('newScheduleEnd').value || null;
+    const schedule_ranges = collectScheduleRanges('newScheduleRows');
+    const primaryRange = schedule_ranges[0] || {};
+    const schedule_start = primaryRange.start || null;
+    const schedule_end = primaryRange.end || null;
 
     if (!url) return;
 
@@ -427,7 +518,7 @@ addPageForm.addEventListener('submit', async (e) => {
         await fetch('/api/pages', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ url, name, duration, display_id, refresh, refresh_interval, schedule_enabled, schedule_start, schedule_end })
+            body: JSON.stringify({ url, name, duration, display_id, refresh, refresh_interval, schedule_enabled, schedule_start, schedule_end, schedule_ranges })
         });
 
         // Reset form
@@ -440,6 +531,7 @@ addPageForm.addEventListener('submit', async (e) => {
         document.getElementById('newRefreshIntervalGroup').style.display = 'none';
         document.getElementById('newScheduleEnabled').checked = false;
         document.getElementById('newScheduleFields').style.display = 'none';
+        setScheduleRows('newScheduleRows', []);
 
         loadPages();
     } catch (error) {
@@ -486,9 +578,13 @@ uploadImageForm.addEventListener('submit', async (e) => {
     formData.append('display_id', document.getElementById('imageDisplayId').value || '');
     formData.append('refresh', document.getElementById('imageRefresh').checked ? 'true' : 'false');
     formData.append('refresh_interval', document.getElementById('imageRefreshInterval').value || '1');
-    formData.append('schedule_enabled', document.getElementById('imageScheduleEnabled').checked ? 'true' : 'false');
-    formData.append('schedule_start', document.getElementById('imageScheduleStart').value || '');
-    formData.append('schedule_end', document.getElementById('imageScheduleEnd').value || '');
+    const imageScheduleEnabled = document.getElementById('imageScheduleEnabled').checked;
+    const imageScheduleRanges = collectScheduleRanges('imageScheduleRows');
+    const imagePrimaryRange = imageScheduleRanges[0] || {};
+    formData.append('schedule_enabled', imageScheduleEnabled ? 'true' : 'false');
+    formData.append('schedule_start', imagePrimaryRange.start || '');
+    formData.append('schedule_end', imagePrimaryRange.end || '');
+    formData.append('schedule_ranges', JSON.stringify(imageScheduleRanges));
 
     try {
         const response = await fetch('/api/images', {
@@ -536,8 +632,8 @@ function editPage(pageId) {
     document.getElementById('editRefreshInterval').value = page.refresh_interval || 1;
     document.getElementById('editRefreshIntervalGroup').style.display = page.refresh ? 'block' : 'none';
     document.getElementById('editScheduleEnabled').checked = page.schedule_enabled;
-    document.getElementById('editScheduleStart').value = page.schedule_start || '09:00';
-    document.getElementById('editScheduleEnd').value = page.schedule_end || '17:00';
+    const editRanges = normalizeScheduleRanges(page);
+    setScheduleRows('editScheduleRows', editRanges);
     document.getElementById('editScheduleFields').style.display = page.schedule_enabled ? 'flex' : 'none';
 
     if (page.type === 'image') {
@@ -585,9 +681,11 @@ editPageForm.addEventListener('submit', async (e) => {
         refresh: document.getElementById('editRefresh').checked,
         refresh_interval: parseInt(document.getElementById('editRefreshInterval').value) || 1,
         schedule_enabled: document.getElementById('editScheduleEnabled').checked,
-        schedule_start: document.getElementById('editScheduleStart').value || null,
-        schedule_end: document.getElementById('editScheduleEnd').value || null
+        schedule_ranges: collectScheduleRanges('editScheduleRows')
     };
+    const editPrimaryRange = data.schedule_ranges[0] || {};
+    data.schedule_start = editPrimaryRange.start || null;
+    data.schedule_end = editPrimaryRange.end || null;
     if (!editUrlEl.disabled) {
         data.url = editUrlEl.value.trim();
     }

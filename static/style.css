@@ -815,9 +815,15 @@ section h2 {
 /* Schedule fields layout */
 .schedule-fields {
     display: flex;
-    align-items: center;
+    align-items: flex-start;
     gap: 10px;
     flex-wrap: wrap;
+}
+
+.schedule-rows {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
 }
 
 .schedule-row {
