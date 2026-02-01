@@ -230,6 +230,12 @@ function renderPages() {
                     <div class="page-url" title="${escapeHtml(page.url || '')}">${escapeHtml(page.url || '')}</div>
                 </div>
                 <div class="page-duration">${page.duration}s</div>
+                <div class="page-toggle">
+                    <label class="toggle-switch" title="${page.enabled ? 'Click to disable' : 'Click to enable'}">
+                        <input type="checkbox" ${page.enabled ? 'checked' : ''} onchange="togglePage(${page.id}, this.checked)">
+                        <span class="toggle-slider"></span>
+                    </label>
+                </div>
                 <div class="page-actions">
                     <button class="btn btn-small btn-secondary" onclick="goToPage(${page.id})" title="Go to this page">Go</button>
                     <button class="btn btn-small btn-secondary" onclick="editPage(${page.id})" title="Edit">Edit</button>
@@ -674,6 +680,22 @@ settingsForm.addEventListener('submit', async (e) => {
         alert('Failed to change hostname: ' + error.message);
     }
 });
+
+// Toggle page enabled/disabled
+async function togglePage(pageId, enabled) {
+    try {
+        await fetch(`/api/pages/${pageId}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ enabled })
+        });
+        loadPages();
+    } catch (error) {
+        console.error('Error toggling page:', error);
+        alert('Failed to toggle page');
+        loadPages(); // Reload to reset checkbox state
+    }
+}
 
 // Delete page
 async function deletePage(pageId) {
