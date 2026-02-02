@@ -116,6 +116,8 @@ local_stable_since = 0  # Track when local connection became stable
 switch_check_interval = 15  # Seconds between switch checks
 switch_stable_window = 30  # Seconds local must be stable before switching
 switch_cooldown = 120  # Minimum seconds between switches
+last_local_failure_time = 0  # Track recent local failures
+local_failure_cooldown = 300  # Seconds to avoid local after failure
 sio = socketio.Client(reconnection=True, reconnection_attempts=0, reconnection_delay=1)
 # Track switch counts per page for interval-based refresh
 page_switch_counts = {}  # page_id -> count since last refresh
@@ -138,6 +140,19 @@ def get_local_ip():
         return ip
     except Exception:
         return "127.0.0.1"
+
+
+def is_ip_in_local_net(ip):
+    """Check if an IP is within the current local network."""
+    try:
+        if not ip or ip.startswith('127.'):
+            return False
+        local_net = get_local_network()
+        if not local_net:
+            return False
+        return ipaddress.ip_address(ip) in local_net
+    except Exception:
+        return False
 
 
 def log(message):
@@ -241,6 +256,12 @@ def upload_screenshot():
             last_screenshot_time = time.time()
         except Exception as e:
             log(f'Screenshot upload failed: {e}')
+            try:
+                global last_local_failure_time
+                if connection_type == 'local':
+                    last_local_failure_time = time.time()
+            except Exception:
+                pass
 
 
 def schedule_screenshot(delay_sec=1.0):
@@ -857,13 +878,15 @@ def connect():
 @sio.event
 def disconnect():
     """Handle disconnection from server."""
-    global last_disconnect_time, last_paused_before_disconnect, pause_reason
+    global last_disconnect_time, last_paused_before_disconnect, pause_reason, last_local_failure_time
     log('Disconnected from server')
     last_disconnect_time = time.time()
     last_paused_before_disconnect = paused
     # Preserve explicit pause modes across reconnects
     if not paused:
         pause_reason = None
+    if connection_type == 'local':
+        last_local_failure_time = time.time()
 
 
 @sio.on('pages_list')
@@ -1276,22 +1299,24 @@ def get_local_network():
     return None
 
 
-def filter_candidates_for_local_ip(candidates, local_ip):
+def filter_candidates_for_local_ip(candidates, local_ip, require_same_subnet=True, avoid_local=False):
     if not local_ip or not candidates:
         return candidates
     local_net = get_local_network()
     filtered = []
     for c in candidates:
-        if c['type'] == 'local':
+        if c['type'] == 'local' and avoid_local:
+            log('Skipping local candidates due to recent local failure')
+            continue
+        if c['type'] == 'local' and require_same_subnet:
             host = get_url_host(c['url'])
-            if host and host.count('.') == 3:
-                if local_net:
-                    try:
-                        if ipaddress.ip_address(host) not in local_net:
-                            log(f'Skipping local candidate {c["url"]} (outside {local_net})')
-                            continue
-                    except Exception:
-                        pass
+            if host and host.count('.') == 3 and local_net:
+                try:
+                    if ipaddress.ip_address(host) not in local_net:
+                        log(f'Skipping local candidate {c["url"]} (outside {local_net})')
+                        continue
+                except Exception:
+                    pass
         filtered.append(c)
     return filtered
 
@@ -1360,8 +1385,9 @@ def wait_for_server(timeout=60):
     # Get connection candidates
     candidates = get_server_candidates(server_url)
 
-    # Filter local candidates that are on a different subnet
-    candidates = filter_candidates_for_local_ip(candidates, get_local_ip())
+    # Filter local candidates that are on a different subnet for reconnect/search
+    avoid_local = (time.time() - last_local_failure_time) < local_failure_cooldown
+    candidates = filter_candidates_for_local_ip(candidates, get_local_ip(), require_same_subnet=True, avoid_local=avoid_local)
 
     # Try to find a working server
     result = find_best_server_url(candidates, timeout)
@@ -1534,7 +1560,8 @@ def main():
 
                     # Get fresh connection candidates (will scan Tailscale peers)
                     candidates = get_server_candidates(server_url)
-                    candidates = filter_candidates_for_local_ip(candidates, get_local_ip())
+                    avoid_local = (time.time() - last_local_failure_time) < local_failure_cooldown
+                    candidates = filter_candidates_for_local_ip(candidates, get_local_ip(), require_same_subnet=True, avoid_local=avoid_local)
                     result = find_best_server_url(candidates, timeout=30)
                     new_url, new_type, new_hostname = result if len(result) == 3 else (*result, None)
 
@@ -1569,8 +1596,15 @@ def main():
                 # Only optimize if currently using non-local connection
                 if connection_type != 'local' and sio.connected:
                     candidates = get_server_candidates(server_url)
-                    candidates = filter_candidates_for_local_ip(candidates, get_local_ip())
+                    avoid_local = (time.time() - last_local_failure_time) < local_failure_cooldown
+                    candidates = filter_candidates_for_local_ip(candidates, get_local_ip(), require_same_subnet=True, avoid_local=avoid_local)
                     local_candidate = find_candidate_by_type(candidates, ['local', 'localhost'])
+
+                    # Only consider switching if the local candidate is in our current subnet
+                    if local_candidate:
+                        host = get_url_host(local_candidate['url'])
+                        if host and not is_ip_in_local_net(host):
+                            local_candidate = None
 
                     if local_candidate and test_server_connection(local_candidate['url'], timeout=2):
                         if local_stable_since == 0:
