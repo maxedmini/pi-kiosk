@@ -27,6 +27,41 @@ from datetime import datetime
 
 import socketio
 
+# Import network helper for Tailscale/hybrid connection support
+try:
+    import network_helper
+    NETWORK_HELPER_AVAILABLE = True
+except ImportError:
+    NETWORK_HELPER_AVAILABLE = False
+    # Fallback implementations if network_helper not available
+    class network_helper:
+        @staticmethod
+        def get_connection_candidates(url, server_name=None):
+            return [{'url': url, 'type': 'unknown', 'priority': 1}]
+
+        @staticmethod
+        def test_connection_health(url, timeout=3):
+            return (False, float('inf'))
+
+        @staticmethod
+        def get_tailscale_ip():
+            return None
+
+        @staticmethod
+        def is_tailscale_active():
+            return False
+
+        @staticmethod
+        def get_peer_tailscale_ip(name):
+            return None
+
+        @staticmethod
+        def discover_server_addresses(local_ip=None, tailscale_name=None, port='5000'):
+            candidates = []
+            if local_ip:
+                candidates.append({'url': f'http://{local_ip}:{port}', 'type': 'local', 'priority': 1})
+            return candidates
+
 # Configuration
 DEFAULT_SERVER_URL = 'http://localhost:5000'
 DISPLAY = os.environ.get('DISPLAY', ':0')
@@ -64,6 +99,13 @@ crash_times = []
 paused = False
 running = True
 server_url = DEFAULT_SERVER_URL
+server_name = None  # Tailscale hostname of the server for auto-discovery
+current_server_url = None  # Track which URL we're actually connected to
+connection_type = 'unknown'  # 'local', 'tailscale', or 'unknown'
+server_url_candidates = []  # List of server URLs to try
+last_connection_health_check = 0  # Time of last health check
+last_disconnect_time = 0  # Track when we disconnected for auto-reconnect logic
+reconnect_rescan_threshold = 30  # Seconds of disconnection before rescanning for servers
 sio = socketio.Client(reconnection=True, reconnection_attempts=0, reconnection_delay=1)
 # Track switch counts per page for interval-based refresh
 page_switch_counts = {}  # page_id -> count since last refresh
@@ -211,14 +253,16 @@ def build_url(path):
     """Build full URL from path."""
     if path.startswith('http://') or path.startswith('https://'):
         return path
-    return f"{server_url}{path}"
+    # Use current_server_url if available (actual connected server), otherwise fall back to configured server_url
+    active_url = current_server_url if current_server_url else server_url
+    return f"{active_url}{path}"
 
 
 def send_status():
     """Send status to server."""
     page = get_current_page()
     try:
-        sio.emit('kiosk_status', {
+        status_data = {
             'hostname': get_hostname(),
             'ip': get_local_ip(),
             'current_page_id': page['id'] if page else None,
@@ -227,7 +271,16 @@ def send_status():
             'current_index': current_index,
             'total_pages': len(pages),
             'safe_mode': time.time() < safe_mode_until
-        })
+        }
+
+        # Add Tailscale/connection info if available
+        if NETWORK_HELPER_AVAILABLE:
+            tailscale_ip = network_helper.get_tailscale_ip()
+            if tailscale_ip:
+                status_data['tailscale_ip'] = tailscale_ip
+            status_data['connection_type'] = connection_type
+
+        sio.emit('kiosk_status', status_data)
     except Exception as e:
         log(f'Error sending status: {e}')
 
@@ -571,7 +624,7 @@ def get_enabled_urls():
             urls.append(build_url(page['url']))
     # Fallback to default image if no pages available
     if not urls:
-        urls = [f'{server_url}/static/default.png']
+        urls = [build_url('/static/default.png')]
     return urls
 
 
@@ -756,7 +809,9 @@ def compute_sync_target(now_ts):
 @sio.event
 def connect():
     """Handle connection to server."""
+    global last_disconnect_time
     log('Connected to server')
+    last_disconnect_time = 0  # Reset disconnect timer on successful connection
     sio.emit('kiosk_connect', {'hostname': get_hostname(), 'ip': get_local_ip()})
     refresh_pages()
     send_health()
@@ -765,7 +820,9 @@ def connect():
 @sio.event
 def disconnect():
     """Handle disconnection from server."""
+    global last_disconnect_time
     log('Disconnected from server')
+    last_disconnect_time = time.time()
 
 
 @sio.on('pages_list')
@@ -1081,17 +1138,130 @@ def wait_for_display(timeout=60):
     return False
 
 
-def wait_for_server(timeout=60):
-    """Wait for server to be available."""
+def get_server_candidates(configured_url):
+    """
+    Get list of server URLs to try, in priority order.
+    Returns list with local IPs first, then Tailscale IPs.
+
+    Automatically discovers Tailscale fallback addresses:
+    - If server_name is configured, uses that specific peer
+    - Otherwise, auto-scans all online Tailscale peers
+    """
+    global server_url_candidates
+
+    if NETWORK_HELPER_AVAILABLE:
+        # Pass server_name to enable Tailscale peer discovery
+        # auto_scan_tailscale=True means it will scan all peers if no specific server_name
+        candidates = network_helper.get_connection_candidates(
+            configured_url,
+            server_name=server_name,
+            auto_scan_tailscale=True
+        )
+
+        server_url_candidates = candidates  # Store for later optimization checks
+
+        # Log candidates grouped by type
+        local_candidates = [c for c in candidates if c['type'] == 'local']
+        tailscale_candidates = [c for c in candidates if c['type'] == 'tailscale']
+
+        log(f'Connection candidates: {len(candidates)} total')
+        if local_candidates:
+            log(f'  Local network: {len(local_candidates)}')
+            for c in local_candidates:
+                log(f'    - {c["url"]}')
+        if tailscale_candidates:
+            log(f'  Tailscale fallback: {len(tailscale_candidates)}')
+            for c in tailscale_candidates:
+                hostname = c.get('hostname', '')
+                if hostname:
+                    log(f'    - {c["url"]} ({hostname})')
+                else:
+                    log(f'    - {c["url"]}')
+
+        return candidates
+    else:
+        # Fallback if network_helper not available
+        candidates = [{'url': configured_url, 'type': 'unknown', 'priority': 1}]
+        server_url_candidates = candidates
+        return candidates
+
+
+def test_server_connection(url, timeout=3):
+    """Test if a server URL is reachable."""
+    try:
+        with urllib.request.urlopen(f'{url}/api/status', timeout=timeout) as resp:
+            if resp.status == 200:
+                return True
+    except Exception:
+        pass
+    return False
+
+
+def find_best_server_url(candidates, timeout=60):
+    """
+    Try connection candidates in priority order until one succeeds.
+    Returns (url, connection_type, hostname) or (None, None, None) if all fail.
+    """
     start = time.time()
+
     while time.time() - start < timeout:
-        try:
-            with urllib.request.urlopen(f'{server_url}/api/status', timeout=5) as resp:
-                if resp.status == 200:
-                    return True
-        except Exception:
-            pass
-        time.sleep(2)
+        for candidate in candidates:
+            url = candidate['url']
+            conn_type = candidate['type']
+            hostname = candidate.get('hostname', '')
+
+            if hostname:
+                log(f'Trying: {url} ({conn_type}, {hostname})...')
+            else:
+                log(f'Trying: {url} ({conn_type})...')
+
+            if test_server_connection(url, timeout=3):
+                if conn_type == 'tailscale' and hostname:
+                    log(f'Connected via Tailscale to {hostname} ({url})')
+                elif conn_type == 'local':
+                    log(f'Connected via local network ({url})')
+                else:
+                    log(f'Connected to {url}')
+                return (url, conn_type, hostname)
+
+        # If we've tried all candidates and none worked, wait before retry
+        if time.time() - start < timeout:
+            log('All candidates failed, retrying in 5s...')
+            time.sleep(5)
+
+    return (None, None, None)
+
+
+def get_connection_priority(conn_type):
+    """Return numeric priority for a connection type (lower is better)."""
+    return {
+        'localhost': 0,
+        'local': 1,
+        'tailscale': 2,
+        'unknown': 3
+    }.get(conn_type, 3)
+
+
+def wait_for_server(timeout=60):
+    """
+    Wait for server to be available, trying multiple connection candidates.
+    Updates global current_server_url and connection_type when successful.
+    """
+    global current_server_url, connection_type
+
+    # Get connection candidates
+    candidates = get_server_candidates(server_url)
+
+    # Try to find a working server
+    result = find_best_server_url(candidates, timeout)
+    best_url, best_type, best_hostname = result if len(result) == 3 else (*result, None)
+
+    if best_url:
+        current_server_url = best_url
+        connection_type = best_type
+        return True
+
+    log('No server connection available')
     return False
 
 
@@ -1109,19 +1279,46 @@ def signal_handler(sig, frame):
 
 
 def main():
-    global running, server_url, DISPLAY, safe_mode_until, crash_times
+    global running, server_url, server_name, DISPLAY, safe_mode_until, crash_times
+    global current_server_url, connection_type, last_disconnect_time
 
     parser = argparse.ArgumentParser(description='Pi Kiosk Display (Tab-Based)')
-    parser.add_argument('--server', '-s', default=DEFAULT_SERVER_URL, help='Server URL')
+    parser.add_argument('--server', '-s', default=DEFAULT_SERVER_URL,
+                        help='Server URL (local IP preferred, e.g., http://192.168.1.100:5000). '
+                             'If Tailscale is installed, will automatically fall back to Tailscale '
+                             'when local network is unavailable.')
+    parser.add_argument('--server-name', '-n', default=None,
+                        help='Optional: Tailscale hostname of server (e.g., pi-server). '
+                             'If not set, will auto-scan all Tailscale peers to find server.')
     parser.add_argument('--display', '-d', default=DISPLAY, help='X display')
     args = parser.parse_args()
 
     server_url = args.server
+    server_name = args.server_name
     DISPLAY = args.display
 
     log('Pi Kiosk starting (tab-based mode)...')
     log(f'Hostname: {get_hostname()}')
-    log(f'Server: {server_url}')
+    log(f'Configured server: {server_url}')
+
+    # Show Tailscale status
+    if NETWORK_HELPER_AVAILABLE:
+        if network_helper.is_tailscale_active():
+            ts_ip = network_helper.get_tailscale_ip()
+            log(f'Tailscale active (this device: {ts_ip})')
+            log('Auto-failover enabled: will use Tailscale if local network unavailable')
+
+            # Show available peers
+            status = network_helper.get_tailscale_status()
+            online_peers = [p for p in status.get('peers', []) if p.get('online')]
+            if online_peers:
+                log(f'Tailscale peers online: {len(online_peers)}')
+                for peer in online_peers[:5]:  # Show first 5
+                    log(f'  - {peer.get("hostname")}')
+                if len(online_peers) > 5:
+                    log(f'  ... and {len(online_peers) - 5} more')
+        else:
+            log('Tailscale not active (local network only)')
 
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
@@ -1144,14 +1341,30 @@ def main():
 
     log('Server ready, connecting...')
 
-    # Connect to server
+    # Connect to server using optimal URL
     while running:
         try:
-            sio.connect(server_url, wait_timeout=10)
+            # Use the current_server_url determined by wait_for_server
+            connect_url = current_server_url if current_server_url else server_url
+            log(f'Connecting to Socket.IO at {connect_url}...')
+            sio.connect(connect_url, wait_timeout=10)
+            log(f'Socket.IO connected successfully (connection type: {connection_type})')
             break
         except Exception as e:
             log(f'Connection failed: {e}')
-            time.sleep(5)
+
+            # Try to find a new best server URL
+            log('Scanning for available servers...')
+            candidates = get_server_candidates(server_url)
+            result = find_best_server_url(candidates, timeout=30)
+            new_url, new_type, _ = result if len(result) == 3 else (*result, None)
+
+            if new_url:
+                current_server_url = new_url
+                connection_type = new_type
+            else:
+                log('No server available, waiting before retry...')
+                time.sleep(5)
 
     # Start switcher thread
     switcher = threading.Thread(target=switcher_thread, daemon=True)
@@ -1160,6 +1373,7 @@ def main():
     # Main loop - monitor browser
     last_crash = 0
     last_health = 0
+    last_connection_optimization = 0
     while running:
         try:
             # Check if browser crashed
@@ -1181,7 +1395,7 @@ def main():
                     log('Entering safe mode due to repeated crashes...')
                     safe_mode_until = now + 300
                     crash_times.clear()
-                    urls = [f'{server_url}/static/default.png']
+                    urls = [build_url('/static/default.png')]
                     launch_browser_with_tabs(urls)
                 else:
                     if now - last_crash < 10:
@@ -1189,7 +1403,7 @@ def main():
                         time.sleep(10)
                     last_crash = now
                     if now < safe_mode_until:
-                        urls = [f'{server_url}/static/default.png']
+                        urls = [build_url('/static/default.png')]
                     else:
                         log('Relaunching browser...')
                         urls = get_enabled_urls()
@@ -1199,6 +1413,77 @@ def main():
             if now - last_health >= 10:
                 send_health()
                 last_health = now
+
+            # Check if we've been disconnected too long and need to rescan for servers
+            if last_disconnect_time > 0 and not sio.connected:
+                disconnect_duration = now - last_disconnect_time
+                if disconnect_duration >= reconnect_rescan_threshold:
+                    log(f'Disconnected for {disconnect_duration:.0f}s, rescanning for available servers...')
+
+                    # Get fresh connection candidates (will scan Tailscale peers)
+                    candidates = get_server_candidates(server_url)
+                    result = find_best_server_url(candidates, timeout=30)
+                    new_url, new_type, new_hostname = result if len(result) == 3 else (*result, None)
+
+                    if new_url:
+                        log(f'Found server at {new_url} ({new_type})')
+                        try:
+                            # Disconnect cleanly if still connected to old session
+                            try:
+                                sio.disconnect()
+                            except:
+                                pass
+
+                            # Update connection info and reconnect
+                            current_server_url = new_url
+                            connection_type = new_type
+                            sio.connect(new_url, wait_timeout=10)
+                            log(f'Reconnected to {new_url} ({new_type})')
+                            last_disconnect_time = 0  # Reset disconnect timer
+                        except Exception as e:
+                            log(f'Reconnection failed: {e}')
+                            # Reset timer to try again later
+                            last_disconnect_time = now
+                    else:
+                        log('No server found, will retry later')
+                        # Reset timer to try again in another threshold period
+                        last_disconnect_time = now
+
+            # Periodic connection optimization (every 60 seconds)
+            # If using Tailscale, check if local network becomes available (faster)
+            if NETWORK_HELPER_AVAILABLE and now - last_connection_optimization >= 60:
+                last_connection_optimization = now
+
+                # Only optimize if currently using non-local connection
+                if connection_type != 'local':
+                    candidates = get_server_candidates(server_url)
+                    current_priority = get_connection_priority(connection_type)
+
+                    # Check if a higher-priority (local) connection is now available
+                    for candidate in candidates:
+                        if candidate['priority'] < current_priority:
+                            # Test if this higher-priority option is now available
+                            if test_server_connection(candidate['url'], timeout=2):
+                                log(f'Connection optimization: {candidate["type"]} connection now available at {candidate["url"]}')
+                                log(f'Switching from {connection_type} to {candidate["type"]} for better performance')
+
+                                # Reconnect to the better server
+                                try:
+                                    sio.disconnect()
+                                    time.sleep(1)
+                                    current_server_url = candidate['url']
+                                    connection_type = candidate['type']
+                                    sio.connect(current_server_url, wait_timeout=10)
+                                    log(f'Successfully switched to {current_server_url} ({connection_type})')
+                                except Exception as e:
+                                    log(f'Failed to switch connections: {e}')
+                                    # If switch failed, try to reconnect to previous server
+                                    try:
+                                        sio.connect(current_server_url, wait_timeout=10)
+                                    except:
+                                        pass
+                                break
+
             sio.sleep(2)
         except KeyboardInterrupt:
             break
