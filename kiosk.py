@@ -107,6 +107,11 @@ last_connection_health_check = 0  # Time of last health check
 last_disconnect_time = 0  # Track when we disconnected for auto-reconnect logic
 reconnect_rescan_threshold = 30  # Seconds of disconnection before rescanning for servers
 last_paused_before_disconnect = False  # Track paused state before disconnect
+last_switch_time = 0  # Track when we last switched connection
+local_stable_since = 0  # Track when local connection became stable
+switch_check_interval = 15  # Seconds between switch checks
+switch_stable_window = 30  # Seconds local must be stable before switching
+switch_cooldown = 120  # Minimum seconds between switches
 sio = socketio.Client(reconnection=True, reconnection_attempts=0, reconnection_delay=1)
 # Track switch counts per page for interval-based refresh
 page_switch_counts = {}  # page_id -> count since last refresh
@@ -1249,6 +1254,15 @@ def get_connection_priority(conn_type):
     }.get(conn_type, 3)
 
 
+def find_candidate_by_type(candidates, preferred_types):
+    """Return first candidate matching preferred types in order."""
+    for preferred in preferred_types:
+        for c in candidates:
+            if c['type'] == preferred:
+                return c
+    return None
+
+
 def wait_for_server(timeout=60):
     """
     Wait for server to be available, trying multiple connection candidates.
@@ -1288,6 +1302,7 @@ def signal_handler(sig, frame):
 def main():
     global running, server_url, server_name, DISPLAY, safe_mode_until, crash_times
     global current_server_url, connection_type, last_disconnect_time
+    global last_switch_time, local_stable_since
 
     parser = argparse.ArgumentParser(description='Pi Kiosk Display (Tab-Based)')
     parser.add_argument('--server', '-s', default=DEFAULT_SERVER_URL,
@@ -1380,7 +1395,7 @@ def main():
     # Main loop - monitor browser
     last_crash = 0
     last_health = 0
-    last_connection_optimization = 0
+    last_switch_check = 0
     while running:
         try:
             # Check if browser crashed
@@ -1456,31 +1471,33 @@ def main():
                         # Reset timer to try again in another threshold period
                         last_disconnect_time = now
 
-            # Periodic connection optimization (every 60 seconds)
-            # If using Tailscale, check if local network becomes available (faster)
-            if NETWORK_HELPER_AVAILABLE and now - last_connection_optimization >= 60:
-                last_connection_optimization = now
+            # Periodic connection optimization with stability + cooldown
+            if NETWORK_HELPER_AVAILABLE and now - last_switch_check >= switch_check_interval:
+                last_switch_check = now
 
                 # Only optimize if currently using non-local connection
-                if connection_type != 'local':
+                if connection_type != 'local' and sio.connected:
                     candidates = get_server_candidates(server_url)
-                    current_priority = get_connection_priority(connection_type)
+                    local_candidate = find_candidate_by_type(candidates, ['local', 'localhost'])
 
-                    # Check if a higher-priority (local) connection is now available
-                    for candidate in candidates:
-                        if candidate['priority'] < current_priority:
-                            # Test if this higher-priority option is now available
-                            if test_server_connection(candidate['url'], timeout=2):
-                                log(f'Connection optimization: {candidate["type"]} connection now available at {candidate["url"]}')
-                                log(f'Switching from {connection_type} to {candidate["type"]} for better performance')
+                    if local_candidate and test_server_connection(local_candidate['url'], timeout=2):
+                        if local_stable_since == 0:
+                            local_stable_since = now
+                        stable_for = now - local_stable_since
 
-                                # Reconnect to the better server
+                        if stable_for >= switch_stable_window:
+                            # Apply cooldown only if we recently switched successfully
+                            if (now - last_switch_time) >= switch_cooldown:
+                                log(f'Local connection stable for {stable_for:.0f}s at {local_candidate["url"]}')
+                                log(f'Switching from {connection_type} to local for better performance')
                                 try:
                                     sio.disconnect()
                                     time.sleep(1)
-                                    current_server_url = candidate['url']
-                                    connection_type = candidate['type']
+                                    current_server_url = local_candidate['url']
+                                    connection_type = local_candidate['type']
                                     sio.connect(current_server_url, wait_timeout=10)
+                                    last_switch_time = time.time()
+                                    local_stable_since = 0
                                     log(f'Successfully switched to {current_server_url} ({connection_type})')
                                 except Exception as e:
                                     log(f'Failed to switch connections: {e}')
@@ -1489,7 +1506,8 @@ def main():
                                         sio.connect(current_server_url, wait_timeout=10)
                                     except:
                                         pass
-                                break
+                    else:
+                        local_stable_since = 0
 
             sio.sleep(2)
         except KeyboardInterrupt:
