@@ -106,6 +106,7 @@ server_url_candidates = []  # List of server URLs to try
 last_connection_health_check = 0  # Time of last health check
 last_disconnect_time = 0  # Track when we disconnected for auto-reconnect logic
 reconnect_rescan_threshold = 30  # Seconds of disconnection before rescanning for servers
+last_paused_before_disconnect = False  # Track paused state before disconnect
 sio = socketio.Client(reconnection=True, reconnection_attempts=0, reconnection_delay=1)
 # Track switch counts per page for interval-based refresh
 page_switch_counts = {}  # page_id -> count since last refresh
@@ -809,9 +810,12 @@ def compute_sync_target(now_ts):
 @sio.event
 def connect():
     """Handle connection to server."""
-    global last_disconnect_time
+    global last_disconnect_time, last_paused_before_disconnect, paused
     log('Connected to server')
     last_disconnect_time = 0  # Reset disconnect timer on successful connection
+    if not last_paused_before_disconnect:
+        paused = False
+    send_status()
     sio.emit('kiosk_connect', {'hostname': get_hostname(), 'ip': get_local_ip()})
     refresh_pages()
     send_health()
@@ -820,9 +824,10 @@ def connect():
 @sio.event
 def disconnect():
     """Handle disconnection from server."""
-    global last_disconnect_time
+    global last_disconnect_time, last_paused_before_disconnect
     log('Disconnected from server')
     last_disconnect_time = time.time()
+    last_paused_before_disconnect = paused
 
 
 @sio.on('pages_list')
