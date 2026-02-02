@@ -20,6 +20,7 @@ import threading
 import time
 import urllib.request
 import urllib.parse
+import ipaddress
 import requests
 import json
 import base64
@@ -1240,25 +1241,57 @@ def get_url_host(url):
         return None
 
 
-def same_subnet_24(ip_a, ip_b):
+def get_default_interface():
     try:
-        a = ip_a.split('.')
-        b = ip_b.split('.')
-        return len(a) == 4 and len(b) == 4 and a[:3] == b[:3]
+        result = subprocess.run(['ip', '-4', 'route', 'show', 'default'], capture_output=True, text=True, timeout=2)
+        if result.returncode != 0:
+            return None
+        # Example: "default via 192.168.0.1 dev wlan0 proto dhcp src 192.168.0.87 metric 303"
+        parts = result.stdout.strip().split()
+        if 'dev' in parts:
+            return parts[parts.index('dev') + 1]
     except Exception:
-        return False
+        pass
+    return None
+
+
+def get_local_network():
+    """Return ipaddress.ip_network for the default interface, or None."""
+    try:
+        dev = get_default_interface()
+        if not dev:
+            return None
+        result = subprocess.run(['ip', '-4', 'addr', 'show', 'dev', dev],
+                                capture_output=True, text=True, timeout=2)
+        if result.returncode != 0:
+            return None
+        for line in result.stdout.splitlines():
+            line = line.strip()
+            if line.startswith('inet '):
+                # inet 192.168.0.87/21 brd 192.168.7.255 scope global dynamic noprefixroute wlan0
+                cidr = line.split()[1]
+                return ipaddress.ip_network(cidr, strict=False)
+    except Exception:
+        pass
+    return None
 
 
 def filter_candidates_for_local_ip(candidates, local_ip):
     if not local_ip or not candidates:
         return candidates
+    local_net = get_local_network()
     filtered = []
     for c in candidates:
         if c['type'] == 'local':
             host = get_url_host(c['url'])
-            if host and host.count('.') == 3 and not same_subnet_24(local_ip, host):
-                log(f'Skipping local candidate {c["url"]} (different subnet than {local_ip})')
-                continue
+            if host and host.count('.') == 3:
+                if local_net:
+                    try:
+                        if ipaddress.ip_address(host) not in local_net:
+                            log(f'Skipping local candidate {c["url"]} (outside {local_net})')
+                            continue
+                    except Exception:
+                        pass
         filtered.append(c)
     return filtered
 
