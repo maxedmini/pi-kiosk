@@ -972,8 +972,6 @@ def on_control(data):
 
     elif action == 'admin_mode':
         log('Entering admin mode')
-        paused = True
-        pause_reason = 'admin'
         try:
             subprocess.run(['pkill', 'unclutter'], capture_output=True, timeout=2)
             subprocess.run(
