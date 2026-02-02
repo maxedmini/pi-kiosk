@@ -121,6 +121,8 @@ last_local_failure_time = 0  # Track recent local failures
 local_failure_cooldown = 300  # Seconds to avoid local after failure
 local_success_count = 0  # Track consecutive local health successes
 local_success_required = 3  # Require N successes before switching
+manual_override_until = 0  # Temporarily ignore sync after manual control
+MANUAL_OVERRIDE_SEC = 30
 sio = socketio.Client(reconnection=True, reconnection_attempts=0, reconnection_delay=1)
 # Track switch counts per page for interval-based refresh
 page_switch_counts = {}  # page_id -> count since last refresh
@@ -711,8 +713,8 @@ def switcher_thread():
             time.sleep(0.5)
             continue
 
-        # Time-locked sync mode (server time)
-        if sync_enabled and sync_server_time is not None and sync_received_at is not None:
+        # Time-locked sync mode (server time) unless manual override is active
+        if sync_enabled and sync_server_time is not None and sync_received_at is not None and time.time() >= manual_override_until:
             now = sync_server_time + (time.time() - sync_received_at)
             idx, remaining = compute_sync_target(now)
             if idx is not None and idx != current_index:
@@ -976,7 +978,7 @@ def on_sync(data):
 @sio.on('control')
 def on_control(data):
     """Handle control commands from server."""
-    global paused, current_index, reset_timer, pause_reason, admin_mode_active
+    global paused, current_index, reset_timer, pause_reason, admin_mode_active, manual_override_until
 
     action = data.get('action')
     log(f'Control: {action}')
@@ -995,6 +997,7 @@ def on_control(data):
         send_keystroke('ctrl+Tab')
         current_index = (current_index + 1) % len(pages) if pages else 0
         reset_timer = True
+        manual_override_until = time.time() + MANUAL_OVERRIDE_SEC
         send_status()
         schedule_switch_screenshot()
 
@@ -1002,6 +1005,7 @@ def on_control(data):
         send_keystroke('ctrl+shift+Tab')
         current_index = (current_index - 1) % len(pages) if pages else 0
         reset_timer = True
+        manual_override_until = time.time() + MANUAL_OVERRIDE_SEC
         send_status()
         schedule_switch_screenshot()
 
@@ -1014,6 +1018,7 @@ def on_control(data):
     elif action == 'goto':
         page_id = data.get('page_id')
         if page_id:
+            manual_override_until = time.time() + MANUAL_OVERRIDE_SEC
             goto_page_id(page_id)
 
     elif action == 'login_mode':
