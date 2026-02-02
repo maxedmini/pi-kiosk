@@ -108,6 +108,7 @@ last_connection_health_check = 0  # Time of last health check
 last_disconnect_time = 0  # Track when we disconnected for auto-reconnect logic
 reconnect_rescan_threshold = 30  # Seconds of disconnection before rescanning for servers
 last_paused_before_disconnect = False  # Track paused state before disconnect
+pause_reason = None  # 'manual', 'admin', 'login', 'sync', or None
 last_switch_time = 0  # Track when we last switched connection
 local_stable_since = 0  # Track when local connection became stable
 switch_check_interval = 15  # Seconds between switch checks
@@ -651,6 +652,7 @@ def switcher_thread():
                 if sync_target_page_id is not None:
                     goto_page_id(sync_target_page_id)
                 paused = False
+                pause_reason = None
                 sync_at = None
                 sync_target_page_id = None
                 send_status()
@@ -816,10 +818,10 @@ def compute_sync_target(now_ts):
 @sio.event
 def connect():
     """Handle connection to server."""
-    global last_disconnect_time, last_paused_before_disconnect, paused
+    global last_disconnect_time, last_paused_before_disconnect, paused, pause_reason
     log('Connected to server')
     last_disconnect_time = 0  # Reset disconnect timer on successful connection
-    if not last_paused_before_disconnect:
+    if pause_reason not in ('manual', 'admin', 'login') and not last_paused_before_disconnect:
         paused = False
     send_status()
     sio.emit('kiosk_connect', {'hostname': get_hostname(), 'ip': get_local_ip()})
@@ -830,10 +832,13 @@ def connect():
 @sio.event
 def disconnect():
     """Handle disconnection from server."""
-    global last_disconnect_time, last_paused_before_disconnect
+    global last_disconnect_time, last_paused_before_disconnect, pause_reason
     log('Disconnected from server')
     last_disconnect_time = time.time()
     last_paused_before_disconnect = paused
+    # Preserve explicit pause modes across reconnects
+    if not paused:
+        pause_reason = None
 
 
 @sio.on('pages_list')
@@ -886,7 +891,7 @@ def on_pages_updated(data):
 @sio.on('sync')
 def on_sync(data):
     """Align all displays to the same page at the same time."""
-    global paused, sync_target_page_id, sync_at, sync_enabled
+    global paused, sync_target_page_id, sync_at, sync_enabled, pause_reason
     if not data:
         return
     if data.get('sync_enabled') is False:
@@ -901,23 +906,26 @@ def on_sync(data):
     sync_at = sync_at_value
     sync_target_page_id = page_id
     paused = True
+    pause_reason = 'sync'
     log(f'Sync scheduled at {sync_at} for page {sync_target_page_id}')
 
 
 @sio.on('control')
 def on_control(data):
     """Handle control commands from server."""
-    global paused, current_index, reset_timer
+    global paused, current_index, reset_timer, pause_reason
 
     action = data.get('action')
     log(f'Control: {action}')
 
     if action == 'pause':
         paused = True
+        pause_reason = 'manual'
         send_status()
 
     elif action == 'resume':
         paused = False
+        pause_reason = None
         send_status()
 
     elif action == 'next':
@@ -947,6 +955,7 @@ def on_control(data):
     elif action == 'login_mode':
         log('Entering login mode')
         paused = True
+        pause_reason = 'login'
         # Show cursor
         try:
             subprocess.run(['pkill', 'unclutter'], capture_output=True, timeout=2)
@@ -957,12 +966,14 @@ def on_control(data):
     elif action == 'exit_login_mode':
         log('Exiting login mode')
         paused = False
+        pause_reason = None
         hide_cursor()
         send_status()
 
     elif action == 'admin_mode':
         log('Entering admin mode')
         paused = True
+        pause_reason = 'admin'
         try:
             subprocess.run(['pkill', 'unclutter'], capture_output=True, timeout=2)
             subprocess.run(
@@ -977,6 +988,7 @@ def on_control(data):
     elif action == 'exit_admin_mode':
         log('Exiting admin mode')
         paused = False
+        pause_reason = None
         try:
             subprocess.run(
                 ['xdotool', 'search', '--name', 'Chromium', 'windowactivate', '--sync'],
