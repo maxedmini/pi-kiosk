@@ -572,6 +572,110 @@ def delete_page(page_id):
     return jsonify({'success': True})
 
 
+@app.route('/api/pages/bulk', methods=['PUT'])
+def bulk_update_pages():
+    """Bulk update pages."""
+    data = request.get_json()
+    if not data or 'ids' not in data or 'updates' not in data:
+        return jsonify({'error': 'ids and updates are required'}), 400
+
+    ids = [int(i) for i in data.get('ids', []) if str(i).isdigit()]
+    updates_data = data.get('updates', {})
+    if not ids or not updates_data:
+        return jsonify({'error': 'No valid ids or updates provided'}), 400
+
+    updates = []
+    values = []
+
+    if 'url' in updates_data:
+        updates.append('url = ?')
+        values.append(updates_data['url'])
+    if 'name' in updates_data:
+        updates.append('name = ?')
+        values.append(updates_data['name'])
+    if 'duration' in updates_data:
+        updates.append('duration = ?')
+        values.append(updates_data['duration'])
+    if 'enabled' in updates_data:
+        updates.append('enabled = ?')
+        values.append(1 if updates_data['enabled'] else 0)
+    if 'position' in updates_data:
+        updates.append('position = ?')
+        values.append(updates_data['position'])
+    if 'display_id' in updates_data:
+        updates.append('display_id = ?')
+        values.append(updates_data['display_id'] if updates_data['display_id'] else None)
+    if 'refresh' in updates_data:
+        updates.append('refresh = ?')
+        values.append(1 if updates_data['refresh'] else 0)
+    if 'refresh_interval' in updates_data:
+        updates.append('refresh_interval = ?')
+        values.append(max(1, int(updates_data['refresh_interval'])))
+    if 'schedule_enabled' in updates_data:
+        updates.append('schedule_enabled = ?')
+        values.append(1 if updates_data['schedule_enabled'] else 0)
+    if 'schedule_start' in updates_data:
+        updates.append('schedule_start = ?')
+        values.append(updates_data['schedule_start'])
+    if 'schedule_end' in updates_data:
+        updates.append('schedule_end = ?')
+        values.append(updates_data['schedule_end'])
+    if 'schedule_ranges' in updates_data:
+        schedule_ranges = updates_data['schedule_ranges']
+        if isinstance(schedule_ranges, list):
+            schedule_ranges = json.dumps(schedule_ranges)
+        updates.append('schedule_ranges = ?')
+        values.append(schedule_ranges)
+
+    if not updates:
+        return jsonify({'error': 'No valid updates provided'}), 400
+
+    conn = get_db()
+    for page_id in ids:
+        conn.execute(
+            f'UPDATE pages SET {", ".join(updates)} WHERE id = ?',
+            values + [page_id]
+        )
+    conn.commit()
+    conn.close()
+
+    socketio.emit('pages_updated', {'action': 'bulk_update'})
+    return jsonify({'success': True, 'updated': len(ids)})
+
+
+@app.route('/api/pages/bulk', methods=['DELETE'])
+def bulk_delete_pages():
+    """Bulk delete pages."""
+    data = request.get_json()
+    if not data or 'ids' not in data:
+        return jsonify({'error': 'ids are required'}), 400
+
+    ids = [int(i) for i in data.get('ids', []) if str(i).isdigit()]
+    if not ids:
+        return jsonify({'error': 'No valid ids provided'}), 400
+
+    placeholders = ','.join(['?'] * len(ids))
+    conn = get_db()
+    rows = conn.execute(f'SELECT * FROM pages WHERE id IN ({placeholders})', ids).fetchall()
+    pages_found = [dict_from_row(r) for r in rows]
+
+    for page in pages_found:
+        if page['type'] == 'image' and page['filename']:
+            filepath = os.path.join(UPLOAD_FOLDER, page['filename'])
+            if os.path.exists(filepath):
+                try:
+                    os.remove(filepath)
+                except Exception:
+                    pass
+
+    conn.execute(f'DELETE FROM pages WHERE id IN ({placeholders})', ids)
+    conn.commit()
+    conn.close()
+
+    socketio.emit('pages_updated', {'action': 'bulk_delete'})
+    return jsonify({'success': True, 'deleted': len(ids)})
+
+
 @app.route('/api/pages/reorder', methods=['POST'])
 def reorder_pages():
     """Reorder pages by providing list of IDs in desired order."""

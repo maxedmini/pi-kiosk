@@ -555,16 +555,19 @@ function clearBulkSelection() {
 async function updatePagesBulk(payload) {
     const ids = Array.from(selectedPageIds);
     if (!ids.length) return;
-    for (const id of ids) {
-        try {
-            await fetch(`/api/pages/${id}`, {
-                method: 'PUT',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload)
-            });
-        } catch (error) {
-            console.error('Bulk update failed for page:', id, error);
+    try {
+        const response = await fetch('/api/pages/bulk', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ids, updates: payload })
+        });
+        if (!response.ok) {
+            const result = await response.json();
+            throw new Error(result.error || 'Bulk update failed');
         }
+    } catch (error) {
+        console.error('Bulk update failed:', error);
+        alert(`Bulk update failed: ${error.message}`);
     }
     await loadPages();
 }
@@ -575,12 +578,19 @@ async function deletePagesBulk() {
     if (!confirm(`Delete ${ids.length} page${ids.length !== 1 ? 's' : ''}?`)) {
         return;
     }
-    for (const id of ids) {
-        try {
-            await fetch(`/api/pages/${id}`, { method: 'DELETE' });
-        } catch (error) {
-            console.error('Bulk delete failed for page:', id, error);
+    try {
+        const response = await fetch('/api/pages/bulk', {
+            method: 'DELETE',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ids })
+        });
+        if (!response.ok) {
+            const result = await response.json();
+            throw new Error(result.error || 'Bulk delete failed');
         }
+    } catch (error) {
+        console.error('Bulk delete failed:', error);
+        alert(`Bulk delete failed: ${error.message}`);
     }
     selectedPageIds.clear();
     await loadPages();
