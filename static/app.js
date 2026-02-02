@@ -331,6 +331,15 @@ function updateDisplaySelects() {
     });
 }
 
+function wifiQualityLabel(rssi) {
+    if (rssi == null || Number.isNaN(rssi)) return '';
+    if (rssi >= -55) return 'Excellent';
+    if (rssi >= -67) return 'Good';
+    if (rssi >= -75) return 'Fair';
+    if (rssi >= -85) return 'Weak';
+    return 'Very weak';
+}
+
 function updateBulkSelectionUI() {
     const count = selectedPageIds.size;
     if (selectedCount) {
@@ -386,7 +395,9 @@ function renderDisplays() {
         const temp = display.temp_c != null ? `${display.temp_c.toFixed(1)}°C` : '—';
         const memFree = display.mem_free_mb != null ? `${Math.round(display.mem_free_mb)} MB free` : '—';
         const uptime = display.uptime_sec != null ? `${Math.floor(display.uptime_sec / 3600)}h` : '—';
-        const wifi = display.wifi_rssi_dbm != null ? `${display.wifi_rssi_dbm} dBm` : '—';
+        const wifi = display.wifi_rssi_dbm != null
+            ? `${display.wifi_rssi_dbm} dBm (${wifiQualityLabel(display.wifi_rssi_dbm)})`
+            : '—';
 
         return `
             <div class="display-card ${statusClass}">
