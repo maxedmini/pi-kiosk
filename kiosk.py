@@ -229,7 +229,7 @@ def upload_screenshot():
         if not capture_screenshot():
             return
         try:
-            url = f"{server_url}/api/display/screenshot"
+            url = build_url('/api/display/screenshot')
             with open(SCREENSHOT_PATH, 'rb') as f:
                 files = {'file': ('screenshot.jpg', f, 'image/jpeg')}
                 data = {'hostname': get_hostname()}
