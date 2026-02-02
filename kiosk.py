@@ -109,6 +109,7 @@ last_disconnect_time = 0  # Track when we disconnected for auto-reconnect logic
 reconnect_rescan_threshold = 30  # Seconds of disconnection before rescanning for servers
 last_paused_before_disconnect = False  # Track paused state before disconnect
 pause_reason = None  # 'manual', 'admin', 'login', 'sync', or None
+admin_mode_active = False
 last_switch_time = 0  # Track when we last switched connection
 local_stable_since = 0  # Track when local connection became stable
 switch_check_interval = 15  # Seconds between switch checks
@@ -248,6 +249,23 @@ def schedule_screenshot(delay_sec=1.0):
     t = threading.Timer(delay_sec, upload_screenshot)
     t.daemon = True
     t.start()
+
+
+def exit_admin_mode_actions():
+    try:
+        subprocess.run(
+            ['xdotool', 'search', '--name', 'Chromium', 'windowactivate', '--sync'],
+            env={**os.environ, 'DISPLAY': DISPLAY},
+            capture_output=True, timeout=5
+        )
+        subprocess.run(
+            ['xdotool', 'key', 'F11'],
+            env={**os.environ, 'DISPLAY': DISPLAY},
+            capture_output=True, timeout=2
+        )
+    except Exception as e:
+        log(f'Error exiting admin mode: {e}')
+    hide_cursor()
 
 
 def get_current_page():
@@ -818,9 +836,15 @@ def compute_sync_target(now_ts):
 @sio.event
 def connect():
     """Handle connection to server."""
-    global last_disconnect_time, last_paused_before_disconnect, paused, pause_reason
+    global last_disconnect_time, last_paused_before_disconnect, paused, pause_reason, admin_mode_active
     log('Connected to server')
     last_disconnect_time = 0  # Reset disconnect timer on successful connection
+    if admin_mode_active:
+        log('Auto-exiting admin mode after reconnect')
+        admin_mode_active = False
+        exit_admin_mode_actions()
+        paused = False
+        pause_reason = None
     if pause_reason not in ('manual', 'admin', 'login') and not last_paused_before_disconnect:
         paused = False
     send_status()
@@ -913,7 +937,7 @@ def on_sync(data):
 @sio.on('control')
 def on_control(data):
     """Handle control commands from server."""
-    global paused, current_index, reset_timer, pause_reason
+    global paused, current_index, reset_timer, pause_reason, admin_mode_active
 
     action = data.get('action')
     log(f'Control: {action}')
@@ -981,26 +1005,15 @@ def on_control(data):
             )
         except Exception as e:
             log(f'Error in admin mode: {e}')
+        admin_mode_active = True
         send_status()
 
     elif action == 'exit_admin_mode':
         log('Exiting admin mode')
         paused = False
         pause_reason = None
-        try:
-            subprocess.run(
-                ['xdotool', 'search', '--name', 'Chromium', 'windowactivate', '--sync'],
-                env={**os.environ, 'DISPLAY': DISPLAY},
-                capture_output=True, timeout=5
-            )
-            subprocess.run(
-                ['xdotool', 'key', 'F11'],
-                env={**os.environ, 'DISPLAY': DISPLAY},
-                capture_output=True, timeout=2
-            )
-        except Exception as e:
-            log(f'Error exiting admin mode: {e}')
-        hide_cursor()
+        admin_mode_active = False
+        exit_admin_mode_actions()
         send_status()
 
 
