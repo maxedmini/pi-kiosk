@@ -182,6 +182,19 @@ function rangesToSegments(ranges) {
     return segments.sort((a, b) => a.start - b.start);
 }
 
+function renderScheduleTimelineMini(ranges) {
+    const segments = rangesToSegments(ranges || []);
+    if (!segments.length) return '';
+    const bars = segments.map(seg => {
+        const width = Math.max(0, seg.end - seg.start);
+        if (!width) return '';
+        const leftPct = (seg.start / 1440) * 100;
+        const widthPct = (width / 1440) * 100;
+        return `<span class="schedule-mini-segment" style="left:${leftPct}%;width:${widthPct}%"></span>`;
+    }).join('');
+    return `<div class="schedule-mini"><div class="schedule-mini-track">${bars}</div></div>`;
+}
+
 function updateScheduleTimeline(containerId) {
     const timeline = document.querySelector(`.schedule-timeline[data-source="${containerId}"]`);
     if (!timeline) return;
@@ -485,6 +498,9 @@ function renderPages() {
         const scheduleBadge = page.schedule_enabled && scheduleLabel
             ? `<span class="page-schedule-badge ${page.is_active ? 'active' : 'inactive'}" title="Scheduled: ${escapeHtml(scheduleLabel)}">${escapeHtml(scheduleLabel)}</span>`
             : '';
+        const scheduleMini = page.schedule_enabled
+            ? renderScheduleTimelineMini(normalizeScheduleRanges(page))
+            : '';
         const isSelected = selectedPageIds.has(page.id);
 
         return `
@@ -502,6 +518,7 @@ function renderPages() {
                         ${scheduleBadge}
                     </div>
                     <div class="page-url" title="${escapeHtml(page.url || '')}">${escapeHtml(page.url || '')}</div>
+                    ${scheduleMini}
                 </div>
                 <div class="page-duration">${page.duration}s</div>
                 <div class="page-toggle">

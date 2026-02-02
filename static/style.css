@@ -678,6 +678,26 @@ section h2 {
     text-overflow: ellipsis;
 }
 
+.schedule-mini {
+    margin-top: 6px;
+}
+
+.schedule-mini-track {
+    position: relative;
+    height: 6px;
+    border-radius: 999px;
+    background: #e5e7eb;
+    overflow: hidden;
+}
+
+.schedule-mini-segment {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    background: linear-gradient(90deg, #38bdf8 0%, #22c55e 100%);
+    border-radius: 999px;
+}
+
 .page-duration {
     font-size: 0.75rem;
     color: var(--gray-600);
