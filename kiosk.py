@@ -71,7 +71,7 @@ PROFILE_DIR = os.path.expanduser('~/.config/pi-kiosk/chromium-profile')
 SCREENSHOT_ENABLED = os.environ.get('PI_KIOSK_SCREENSHOT', '1').lower() not in ('0', 'false', 'no')
 SCREENSHOT_SIZE = os.environ.get('PI_KIOSK_SCREENSHOT_SIZE', '640x360')
 SCREENSHOT_PATH = '/tmp/pi-kiosk-shot.jpg'
-SCREENSHOT_INTERVAL_SEC = 3
+SCREENSHOT_INTERVAL_SEC = 10
 SCREENSHOT_FORCE_SOFTWARE = os.environ.get('PI_KIOSK_SCREENSHOT_SOFTWARE', '1').lower() in ('1', 'true', 'yes')
 
 

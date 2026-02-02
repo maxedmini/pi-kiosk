@@ -405,8 +405,9 @@ function renderDisplays() {
         const pageName = page?.name || 'Unknown';
         const isSafe = !!display.safe_mode;
         const statusClass = isSafe ? 'safe' : (display.paused ? 'paused' : 'online');
+        const screenshotVersion = display.last_screenshot || '';
         const screenshotUrl = display.screenshot_url
-            ? `${absoluteUrl(display.screenshot_url)}?t=${Date.now()}`
+            ? `${absoluteUrl(display.screenshot_url)}${screenshotVersion ? `?v=${encodeURIComponent(screenshotVersion)}` : ''}`
             : '';
         const fallbackUrl = page?.type === 'image'
             ? absoluteUrl(page?.thumbnail || display.current_url)
