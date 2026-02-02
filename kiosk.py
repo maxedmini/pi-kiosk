@@ -970,6 +970,7 @@ def on_control(data):
 
     elif action == 'exit_admin_mode':
         log('Exiting admin mode')
+        paused = False
         try:
             subprocess.run(
                 ['xdotool', 'search', '--name', 'Chromium', 'windowactivate', '--sync'],
