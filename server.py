@@ -39,6 +39,7 @@ app.config['SECRET_KEY'] = os.urandom(24)
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['MAX_CONTENT_LENGTH'] = MAX_CONTENT_LENGTH
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode='gevent')
+ASSET_CACHE_BUST = str(int(time.time()))
 
 # Connected displays (in-memory tracking)
 # Key: socket session ID, Value: display info dict
@@ -277,13 +278,13 @@ def reboot_system():
 @app.route('/')
 def index():
     """Serve the management interface."""
-    return render_template('index.html')
+    return render_template('index.html', cache_bust=ASSET_CACHE_BUST)
 
 
 @app.route('/display')
 def display():
     """Serve the full-screen display viewer."""
-    return render_template('display.html')
+    return render_template('display.html', cache_bust=ASSET_CACHE_BUST)
 
 
 # Serve uploaded images
