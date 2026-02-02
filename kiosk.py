@@ -1236,6 +1236,20 @@ def same_subnet_24(ip_a, ip_b):
         return False
 
 
+def filter_candidates_for_local_ip(candidates, local_ip):
+    if not local_ip or not candidates:
+        return candidates
+    filtered = []
+    for c in candidates:
+        if c['type'] == 'local':
+            host = get_url_host(c['url'])
+            if host and host.count('.') == 3 and not same_subnet_24(local_ip, host):
+                log(f'Skipping local candidate {c["url"]} (different subnet than {local_ip})')
+                continue
+        filtered.append(c)
+    return filtered
+
+
 def find_best_server_url(candidates, timeout=60):
     """
     Try connection candidates in priority order until one succeeds.
@@ -1300,18 +1314,8 @@ def wait_for_server(timeout=60):
     # Get connection candidates
     candidates = get_server_candidates(server_url)
 
-    # If local candidate is on a different /24 than this device, drop it to avoid flapping
-    local_ip = get_local_ip()
-    if local_ip and candidates:
-        filtered = []
-        for c in candidates:
-            if c['type'] == 'local':
-                host = get_url_host(c['url'])
-                if host and host.count('.') == 3 and not same_subnet_24(local_ip, host):
-                    log(f'Skipping local candidate {c["url"]} (different subnet than {local_ip})')
-                    continue
-            filtered.append(c)
-        candidates = filtered
+    # Filter local candidates that are on a different subnet
+    candidates = filter_candidates_for_local_ip(candidates, get_local_ip())
 
     # Try to find a working server
     result = find_best_server_url(candidates, timeout)
@@ -1484,6 +1488,7 @@ def main():
 
                     # Get fresh connection candidates (will scan Tailscale peers)
                     candidates = get_server_candidates(server_url)
+                    candidates = filter_candidates_for_local_ip(candidates, get_local_ip())
                     result = find_best_server_url(candidates, timeout=30)
                     new_url, new_type, new_hostname = result if len(result) == 3 else (*result, None)
 
@@ -1518,6 +1523,7 @@ def main():
                 # Only optimize if currently using non-local connection
                 if connection_type != 'local' and sio.connected:
                     candidates = get_server_candidates(server_url)
+                    candidates = filter_candidates_for_local_ip(candidates, get_local_ip())
                     local_candidate = find_candidate_by_type(candidates, ['local', 'localhost'])
 
                     if local_candidate and test_server_connection(local_candidate['url'], timeout=2):
