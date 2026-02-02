@@ -72,6 +72,7 @@ SCREENSHOT_ENABLED = os.environ.get('PI_KIOSK_SCREENSHOT', '1').lower() not in (
 SCREENSHOT_SIZE = os.environ.get('PI_KIOSK_SCREENSHOT_SIZE', '640x360')
 SCREENSHOT_PATH = '/tmp/pi-kiosk-shot.jpg'
 SCREENSHOT_INTERVAL_SEC = 10
+SCREENSHOT_ON_SWITCH_ONLY = True
 SCREENSHOT_FORCE_SOFTWARE = os.environ.get('PI_KIOSK_SCREENSHOT_SOFTWARE', '1').lower() in ('1', 'true', 'yes')
 
 
@@ -235,17 +236,17 @@ def capture_screenshot():
     return False
 
 
-def upload_screenshot():
+def upload_screenshot(force=False):
     """Upload the latest screenshot to the server."""
     global last_screenshot_time
     if not SCREENSHOT_ENABLED:
         return
     now = time.time()
-    if now - last_screenshot_time < SCREENSHOT_INTERVAL_SEC:
+    if not force and now - last_screenshot_time < SCREENSHOT_INTERVAL_SEC:
         return
     with shot_lock:
         now = time.time()
-        if now - last_screenshot_time < SCREENSHOT_INTERVAL_SEC:
+        if not force and now - last_screenshot_time < SCREENSHOT_INTERVAL_SEC:
             return
         if not capture_screenshot():
             return
@@ -266,14 +267,21 @@ def upload_screenshot():
                 pass
 
 
-def schedule_screenshot(delay_sec=1.0):
+def schedule_screenshot(delay_sec=1.0, force=False):
     """Schedule a screenshot upload after a delay."""
     if not SCREENSHOT_ENABLED:
         return
-    t = threading.Timer(delay_sec, upload_screenshot)
+    t = threading.Timer(delay_sec, upload_screenshot, kwargs={'force': force})
     t.daemon = True
     t.start()
 
+
+def schedule_switch_screenshot():
+    """Schedule screenshot on tab switch only."""
+    if SCREENSHOT_ON_SWITCH_ONLY:
+        schedule_screenshot(force=True)
+    else:
+        schedule_screenshot()
 
 def exit_admin_mode_actions():
     try:
@@ -762,7 +770,7 @@ def switcher_thread():
                     page_switch_counts[page_id] = 0  # Reset counter
 
             send_status()
-            schedule_screenshot()
+            schedule_switch_screenshot()
 
     log('Switcher thread stopped')
 
@@ -789,7 +797,7 @@ def goto_page_id(page_id):
         return
     if idx == current_index:
         send_status()
-        schedule_screenshot()
+        schedule_switch_screenshot()
         return
     tab_num = idx + 1
     if 1 <= tab_num <= 9:
@@ -797,7 +805,7 @@ def goto_page_id(page_id):
         current_index = idx
         reset_timer = True
         send_status()
-        schedule_screenshot()
+        schedule_switch_screenshot()
         return
     # For tabs > 9, cycle through
     while current_index != idx:
@@ -806,7 +814,7 @@ def goto_page_id(page_id):
         time.sleep(0.2)
     reset_timer = True
     send_status()
-    schedule_screenshot()
+    schedule_switch_screenshot()
 
 
 def goto_page_index(idx):
@@ -816,7 +824,7 @@ def goto_page_index(idx):
         return
     if idx == current_index:
         send_status()
-        schedule_screenshot()
+        schedule_switch_screenshot()
         return
     tab_num = idx + 1
     if 1 <= tab_num <= 9:
@@ -824,7 +832,7 @@ def goto_page_index(idx):
         current_index = idx
         reset_timer = True
         send_status()
-        schedule_screenshot()
+        schedule_switch_screenshot()
         return
     while current_index != idx:
         send_keystroke('ctrl+Tab')
@@ -832,7 +840,7 @@ def goto_page_index(idx):
         time.sleep(0.2)
     reset_timer = True
     send_status()
-    schedule_screenshot()
+    schedule_switch_screenshot()
 
 
 def compute_sync_target(now_ts):
@@ -988,19 +996,20 @@ def on_control(data):
         current_index = (current_index + 1) % len(pages) if pages else 0
         reset_timer = True
         send_status()
-        schedule_screenshot()
+        schedule_switch_screenshot()
 
     elif action == 'prev':
         send_keystroke('ctrl+shift+Tab')
         current_index = (current_index - 1) % len(pages) if pages else 0
         reset_timer = True
         send_status()
-        schedule_screenshot()
+        schedule_switch_screenshot()
 
     elif action == 'refresh':
         send_keystroke('ctrl+r')
         reset_timer = True
-        schedule_screenshot()
+        if not SCREENSHOT_ON_SWITCH_ONLY:
+            schedule_screenshot()
 
     elif action == 'goto':
         page_id = data.get('page_id')
