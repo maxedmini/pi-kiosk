@@ -77,9 +77,18 @@ async function loadSystemInfo() {
     try {
         systemInfo = await fetchJson('/api/system/hostname');
         systemHostname.textContent = systemInfo.hostname;
-        systemIp.textContent = `(${systemInfo.ip})`;
-        installIp.textContent = systemInfo.ip;
-        installIp2.textContent = systemInfo.ip;
+
+        // Display both local and Tailscale IP if available
+        let ipDisplay = `(${systemInfo.ip})`;
+        if (systemInfo.tailscale_ip) {
+            ipDisplay += ` Tailscale: ${systemInfo.tailscale_ip}`;
+        }
+        systemIp.textContent = ipDisplay;
+
+        // For install commands, prefer Tailscale IP if available (for remote access)
+        const installIpToUse = systemInfo.tailscale_ip || systemInfo.ip;
+        installIp.textContent = installIpToUse;
+        installIp2.textContent = installIpToUse;
     } catch (error) {
         console.error('Error loading system info:', error);
     }
@@ -410,6 +419,9 @@ function renderDisplays() {
         const wifi = display.wifi_rssi_dbm != null
             ? `${display.wifi_rssi_dbm} dBm (${wifiQualityLabel(display.wifi_rssi_dbm)})`
             : '—';
+        const currentIndex = Number.isFinite(display.current_index) ? display.current_index + 1 : '—';
+        const totalPages = Number.isFinite(display.total_pages) ? display.total_pages : '?';
+        const pageLabel = pageName || '—';
 
         return `
             <div class="display-card ${statusClass}">
@@ -418,8 +430,8 @@ function renderDisplays() {
                     <span class="display-status ${statusClass}">${isSafe ? 'Safe' : (display.paused ? 'Paused' : 'Playing')}</span>
                 </div>
                 <div class="display-info">
-                    <div>IP: ${escapeHtml(display.ip)}</div>
-                    <div>Page: ${escapeHtml(pageName)} (${display.current_index + 1}/${display.total_pages || '?'})</div>
+                    <div>IP: ${escapeHtml(display.ip)}${display.connection_type ? ` (${display.connection_type})` : ''}${display.tailscale_ip ? ` TS: ${display.tailscale_ip}` : ''}</div>
+                    <div>Page: ${escapeHtml(pageLabel)} (${currentIndex}/${totalPages})</div>
                     <div class="display-health">
                         <span class="health-metric">Temp ${temp}</span>
                         <span class="health-metric">Mem ${memFree}</span>
