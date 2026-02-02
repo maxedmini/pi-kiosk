@@ -19,6 +19,7 @@ import sys
 import threading
 import time
 import urllib.request
+import urllib.parse
 import requests
 import json
 import base64
@@ -1209,6 +1210,22 @@ def test_server_connection(url, timeout=3):
     return False
 
 
+def get_url_host(url):
+    try:
+        return urllib.parse.urlparse(url).hostname
+    except Exception:
+        return None
+
+
+def same_subnet_24(ip_a, ip_b):
+    try:
+        a = ip_a.split('.')
+        b = ip_b.split('.')
+        return len(a) == 4 and len(b) == 4 and a[:3] == b[:3]
+    except Exception:
+        return False
+
+
 def find_best_server_url(candidates, timeout=60):
     """
     Try connection candidates in priority order until one succeeds.
@@ -1272,6 +1289,19 @@ def wait_for_server(timeout=60):
 
     # Get connection candidates
     candidates = get_server_candidates(server_url)
+
+    # If local candidate is on a different /24 than this device, drop it to avoid flapping
+    local_ip = get_local_ip()
+    if local_ip and candidates:
+        filtered = []
+        for c in candidates:
+            if c['type'] == 'local':
+                host = get_url_host(c['url'])
+                if host and host.count('.') == 3 and not same_subnet_24(local_ip, host):
+                    log(f'Skipping local candidate {c["url"]} (different subnet than {local_ip})')
+                    continue
+            filtered.append(c)
+        candidates = filtered
 
     # Try to find a working server
     result = find_best_server_url(candidates, timeout)
