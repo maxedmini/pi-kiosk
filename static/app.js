@@ -75,8 +75,7 @@ socket.on('pages_updated', () => {
 // Functions
 async function loadSystemInfo() {
     try {
-        const response = await fetch('/api/system/hostname');
-        systemInfo = await response.json();
+        systemInfo = await fetchJson('/api/system/hostname');
         systemHostname.textContent = systemInfo.hostname;
         systemIp.textContent = `(${systemInfo.ip})`;
         installIp.textContent = systemInfo.ip;
@@ -93,24 +92,24 @@ function absoluteUrl(url) {
     return `${base}${url.startsWith('/') ? '' : '/'}${url}`;
 }
 
+async function fetchJson(url, options) {
+    const response = await fetch(url, options);
+    let data = null;
+    try {
+        data = await response.json();
+    } catch (_) {
+        data = null;
+    }
+    if (!response.ok) {
+        const message = data?.error || response.statusText || 'Request failed';
+        throw new Error(message);
+    }
+    return data;
+}
+
 function normalizeScheduleRanges(page) {
-    let ranges = [];
-    if (page && Array.isArray(page.schedule_ranges)) {
-        ranges = page.schedule_ranges.filter(r => r && r.start && r.end);
-    } else if (page && typeof page.schedule_ranges === 'string') {
-        try {
-            const parsed = JSON.parse(page.schedule_ranges);
-            if (Array.isArray(parsed)) {
-                ranges = parsed.filter(r => r && r.start && r.end);
-            }
-        } catch (e) {
-            ranges = [];
-        }
-    }
-    if (!ranges.length && page && page.schedule_start && page.schedule_end) {
-        ranges = [{ start: page.schedule_start, end: page.schedule_end }];
-    }
-    return ranges;
+    if (!page || !Array.isArray(page.schedule_ranges)) return [];
+    return page.schedule_ranges.filter(r => r && r.start && r.end);
 }
 
 function formatScheduleRanges(page) {
@@ -447,8 +446,7 @@ function renderDisplays() {
 
 async function loadPages() {
     try {
-        const response = await fetch('/api/pages');
-        pages = await response.json();
+        pages = await fetchJson('/api/pages');
         const validIds = new Set(pages.map(p => p.id));
         selectedPageIds = new Set(Array.from(selectedPageIds).filter(id => validIds.has(id)));
         renderPages();
@@ -459,8 +457,7 @@ async function loadPages() {
 
 async function loadDisplays() {
     try {
-        const response = await fetch('/api/displays');
-        displays = await response.json();
+        displays = await fetchJson('/api/displays');
         renderDisplays();
         updateDisplaySelects();
         updateGlobalPauseButton();
@@ -573,15 +570,11 @@ async function updatePagesBulk(payload) {
     const ids = Array.from(selectedPageIds);
     if (!ids.length) return;
     try {
-        const response = await fetch('/api/pages/bulk', {
+        await fetchJson('/api/pages/bulk', {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ ids, updates: payload })
         });
-        if (!response.ok) {
-            const result = await response.json();
-            throw new Error(result.error || 'Bulk update failed');
-        }
     } catch (error) {
         console.error('Bulk update failed:', error);
         alert(`Bulk update failed: ${error.message}`);
@@ -596,15 +589,11 @@ async function deletePagesBulk() {
         return;
     }
     try {
-        const response = await fetch('/api/pages/bulk', {
+        await fetchJson('/api/pages/bulk', {
             method: 'DELETE',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ ids })
         });
-        if (!response.ok) {
-            const result = await response.json();
-            throw new Error(result.error || 'Bulk delete failed');
-        }
     } catch (error) {
         console.error('Bulk delete failed:', error);
         alert(`Bulk delete failed: ${error.message}`);
@@ -1137,8 +1126,7 @@ settingsForm.addEventListener('submit', async (e) => {
 
 async function loadSyncSetting() {
     try {
-        const response = await fetch('/api/settings/sync');
-        const data = await response.json();
+        const data = await fetchJson('/api/settings/sync');
         document.getElementById('settingsSyncEnabled').checked = !!data.sync_enabled;
     } catch (error) {
         console.error('Error loading sync setting:', error);
