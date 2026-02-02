@@ -167,6 +167,30 @@ def _parse_schedule_ranges(raw_ranges):
     return normalized
 
 
+def _normalize_schedule_ranges(page):
+    """Return normalized schedule ranges for a page as a list."""
+    ranges = []
+    raw_ranges = page.get('schedule_ranges')
+    if isinstance(raw_ranges, list):
+        for r in raw_ranges:
+            if not isinstance(r, dict):
+                continue
+            start = r.get('start')
+            end = r.get('end')
+            if isinstance(start, str) and isinstance(end, str) and start and end:
+                ranges.append({'start': start, 'end': end})
+    elif isinstance(raw_ranges, str) and raw_ranges.strip():
+        ranges = _parse_schedule_ranges(raw_ranges)
+
+    if not ranges:
+        start_str = page.get('schedule_start')
+        end_str = page.get('schedule_end')
+        if start_str and end_str:
+            ranges = [{'start': start_str, 'end': end_str}]
+
+    return ranges
+
+
 def is_page_active_now(page):
     """Check if a page should be displayed at the current time.
 
@@ -180,17 +204,9 @@ def is_page_active_now(page):
     if not page.get('schedule_enabled'):
         return True
 
-    ranges = []
-    raw_ranges = page.get('schedule_ranges')
-    if isinstance(raw_ranges, str) and raw_ranges.strip():
-        ranges = _parse_schedule_ranges(raw_ranges)
+    ranges = _normalize_schedule_ranges(page)
     if not ranges:
-        start_str = page.get('schedule_start')
-        end_str = page.get('schedule_end')
-        if start_str and end_str:
-            ranges = [{'start': start_str, 'end': end_str}]
-        else:
-            return True
+        return True
 
     try:
         now = datetime.now()
@@ -394,6 +410,7 @@ def get_pages():
     result = []
     for p in pages:
         page_dict = dict_from_row(p)
+        page_dict['schedule_ranges'] = _normalize_schedule_ranges(page_dict)
         # For images, generate the viewer URL
         if page_dict['type'] == 'image' and page_dict['filename']:
             page_dict['url'] = f"/view/image/{page_dict['filename']}"
@@ -462,7 +479,9 @@ def get_page(page_id):
     if not page:
         return jsonify({'error': 'Page not found'}), 404
 
-    return jsonify(dict_from_row(page))
+    page_dict = dict_from_row(page)
+    page_dict['schedule_ranges'] = _normalize_schedule_ranges(page_dict)
+    return jsonify(page_dict)
 
 
 @app.route('/api/pages/<int:page_id>', methods=['PUT'])

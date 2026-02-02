@@ -95,11 +95,11 @@ function absoluteUrl(url) {
 
 function normalizeScheduleRanges(page) {
     let ranges = [];
-    if (page && page.schedule_ranges) {
+    if (page && Array.isArray(page.schedule_ranges)) {
+        ranges = page.schedule_ranges.filter(r => r && r.start && r.end);
+    } else if (page && typeof page.schedule_ranges === 'string') {
         try {
-            const parsed = typeof page.schedule_ranges === 'string'
-                ? JSON.parse(page.schedule_ranges)
-                : page.schedule_ranges;
+            const parsed = JSON.parse(page.schedule_ranges);
             if (Array.isArray(parsed)) {
                 ranges = parsed.filter(r => r && r.start && r.end);
             }
