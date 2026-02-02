@@ -391,7 +391,16 @@ function renderDisplays() {
     noDisplays.style.display = 'none';
     displaysList.style.display = 'grid';
 
-    displaysList.innerHTML = displays.map(display => {
+    const displayOrder = displays.slice().sort((a, b) => {
+        const serverHost = systemInfo?.hostname || '';
+        const aIsServer = a.hostname === serverHost;
+        const bIsServer = b.hostname === serverHost;
+        if (aIsServer && !bIsServer) return -1;
+        if (!aIsServer && bIsServer) return 1;
+        return (a.hostname || '').localeCompare(b.hostname || '');
+    });
+
+    displaysList.innerHTML = displayOrder.map(display => {
         const page = pages.find(p => p.id === display.current_page_id);
         const pageName = page?.name || 'Unknown';
         const isSafe = !!display.safe_mode;
