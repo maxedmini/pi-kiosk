@@ -21,6 +21,13 @@ from werkzeug.utils import secure_filename
 from flask import Flask, render_template, request, jsonify, send_from_directory
 from flask_socketio import SocketIO, emit
 
+# Import network helper for Tailscale support
+try:
+    import network_helper
+    NETWORK_HELPER_AVAILABLE = True
+except ImportError:
+    NETWORK_HELPER_AVAILABLE = False
+
 # Configuration
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATABASE = os.path.join(BASE_DIR, 'pages.db')
@@ -254,6 +261,27 @@ def get_local_ip():
         return ip
     except Exception:
         return "127.0.0.1"
+
+
+def get_tailscale_ip():
+    """Get the Tailscale IP address if available."""
+    if NETWORK_HELPER_AVAILABLE:
+        return network_helper.get_tailscale_ip()
+    return None
+
+
+def is_tailscale_active():
+    """Check if Tailscale is active."""
+    if NETWORK_HELPER_AVAILABLE:
+        return network_helper.is_tailscale_active()
+    return False
+
+
+def get_tailscale_status():
+    """Get Tailscale status information."""
+    if NETWORK_HELPER_AVAILABLE:
+        return network_helper.get_tailscale_status()
+    return {'active': False}
 
 
 def reboot_system():
@@ -855,11 +883,19 @@ def upload_image():
 
 @app.route('/api/system/hostname', methods=['GET'])
 def get_system_hostname():
-    """Get current system hostname."""
-    return jsonify({
+    """Get current system hostname and network information."""
+    response_data = {
         'hostname': get_hostname(),
         'ip': get_local_ip()
-    })
+    }
+
+    # Add Tailscale information if available
+    tailscale_ip = get_tailscale_ip()
+    if tailscale_ip:
+        response_data['tailscale_ip'] = tailscale_ip
+        response_data['tailscale_active'] = is_tailscale_active()
+
+    return jsonify(response_data)
 
 
 @app.route('/api/system/hostname', methods=['PUT'])
@@ -1079,11 +1115,19 @@ def get_displays():
 @app.route('/api/status', methods=['GET'])
 def get_status():
     """Get overall system status."""
-    return jsonify({
+    status_data = {
         'displays': len(connected_displays),
         'hostname': get_hostname(),
         'ip': get_local_ip()
-    })
+    }
+
+    # Add Tailscale information if available
+    tailscale_ip = get_tailscale_ip()
+    if tailscale_ip:
+        status_data['tailscale_ip'] = tailscale_ip
+        status_data['tailscale_active'] = is_tailscale_active()
+
+    return jsonify(status_data)
 
 
 @app.route('/api/control', methods=['POST'])
@@ -1193,9 +1237,12 @@ def handle_kiosk_connect(data=None):
     connected_displays[sid] = {
         'hostname': hostname,
         'ip': info.get('ip', request.remote_addr),
+        'tailscale_ip': info.get('tailscale_ip'),
+        'connection_type': info.get('connection_type', 'unknown'),
         'current_page_id': None,
         'current_url': None,
         'paused': False,
+        'admin_mode_active': False,
         'last_seen': datetime.now().isoformat()
     }
 
@@ -1221,9 +1268,12 @@ def handle_kiosk_status(data):
         connected_displays[sid] = {
             'hostname': hostname,
             'ip': data.get('ip', request.remote_addr),
+            'tailscale_ip': data.get('tailscale_ip'),
+            'connection_type': data.get('connection_type', 'unknown'),
             'current_page_id': None,
             'current_url': None,
             'paused': False,
+            'admin_mode_active': False,
             'last_seen': datetime.now().isoformat()
         }
 
@@ -1232,9 +1282,12 @@ def handle_kiosk_status(data):
             'current_page_id': data.get('current_page_id'),
             'current_url': data.get('current_url'),
             'paused': data.get('paused', False),
+            'admin_mode_active': data.get('admin_mode_active', connected_displays[sid].get('admin_mode_active', False)),
             'current_index': data.get('current_index'),
             'total_pages': data.get('total_pages'),
             'safe_mode': data.get('safe_mode', False),
+            'tailscale_ip': data.get('tailscale_ip'),
+            'connection_type': data.get('connection_type', connected_displays[sid].get('connection_type', 'unknown')),
             'last_seen': datetime.now().isoformat()
         })
 

@@ -330,7 +330,8 @@ def send_status():
             'paused': paused,
             'current_index': current_index,
             'total_pages': len(pages),
-            'safe_mode': time.time() < safe_mode_until
+            'safe_mode': time.time() < safe_mode_until,
+            'admin_mode_active': admin_mode_active
         }
 
         # Add Tailscale/connection info if available

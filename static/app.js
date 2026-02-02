@@ -432,6 +432,7 @@ function renderDisplays() {
         const currentIndex = Number.isFinite(display.current_index) ? display.current_index + 1 : '—';
         const totalPages = Number.isFinite(display.total_pages) ? display.total_pages : '?';
         const pageLabel = pageName || '—';
+        const adminActive = !!display.admin_mode_active;
 
         return `
             <div class="display-card ${statusClass}">
@@ -460,8 +461,9 @@ function renderDisplays() {
                     </button>
                     <button class="btn btn-small btn-secondary" onclick="sendControlToDisplay('${display.id}', 'next')" title="Next">&#9654;</button>
                     <button class="btn btn-small btn-secondary" onclick="sendControlToDisplay('${display.id}', 'refresh')" title="Refresh">&#8635;</button>
-                    <button class="btn btn-small btn-warning" onclick="openAdminMode('${display.id}')" title="Admin Mode">Admin</button>
-                    <button class="btn btn-small btn-secondary" onclick="exitAdminMode('${display.id}')" title="Exit Admin Mode">Exit</button>
+                    ${adminActive
+                        ? `<button class="btn btn-small btn-secondary" onclick="exitAdminMode('${display.id}')" title="Exit Admin Mode">Exit</button>`
+                        : `<button class="btn btn-small btn-warning" onclick="openAdminMode('${display.id}')" title="Admin Mode">Admin</button>`}
                 </div>
             </div>
         `;
