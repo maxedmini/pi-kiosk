@@ -460,8 +460,8 @@ function renderDisplays() {
                     </button>
                     <button class="btn btn-small btn-secondary" onclick="sendControlToDisplay('${display.id}', 'next')" title="Next">&#9654;</button>
                     <button class="btn btn-small btn-secondary" onclick="sendControlToDisplay('${display.id}', 'refresh')" title="Refresh">&#8635;</button>
-                    <button class="btn btn-small btn-warning" onclick="sendControlToDisplay('${display.id}', 'admin_mode')" title="Admin Mode">Admin</button>
-                    <button class="btn btn-small btn-secondary" onclick="sendControlToDisplay('${display.id}', 'exit_admin_mode')" title="Exit Admin Mode">Exit</button>
+                    <button class="btn btn-small btn-warning" onclick="openAdminMode('${display.id}')" title="Admin Mode">Admin</button>
+                    <button class="btn btn-small btn-secondary" onclick="exitAdminMode('${display.id}')" title="Exit Admin Mode">Exit</button>
                 </div>
             </div>
         `;
@@ -804,6 +804,17 @@ async function sendControlToDisplay(displayId, action) {
     } catch (error) {
         console.error('Error sending control:', error);
     }
+}
+
+function openAdminMode(displayId) {
+    if (!confirm('Enter admin mode for this display?')) {
+        return;
+    }
+    sendControlToDisplay(displayId, 'admin_mode');
+}
+
+function exitAdminMode(displayId) {
+    sendControlToDisplay(displayId, 'exit_admin_mode');
 }
 
 function goToPage(pageId) {
