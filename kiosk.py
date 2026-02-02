@@ -950,6 +950,7 @@ def on_control(data):
 
     elif action == 'exit_login_mode':
         log('Exiting login mode')
+        paused = False
         hide_cursor()
         send_status()
 
