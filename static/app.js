@@ -459,6 +459,8 @@ function renderDisplays() {
                     </button>
                     <button class="btn btn-small btn-secondary" onclick="sendControlToDisplay('${display.id}', 'next')" title="Next">&#9654;</button>
                     <button class="btn btn-small btn-secondary" onclick="sendControlToDisplay('${display.id}', 'refresh')" title="Refresh">&#8635;</button>
+                    <button class="btn btn-small btn-warning" onclick="sendControlToDisplay('${display.id}', 'admin_mode')" title="Admin Mode">Admin</button>
+                    <button class="btn btn-small btn-secondary" onclick="sendControlToDisplay('${display.id}', 'exit_admin_mode')" title="Exit Admin Mode">Exit</button>
                 </div>
             </div>
         `;
