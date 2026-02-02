@@ -118,6 +118,8 @@ switch_stable_window = 30  # Seconds local must be stable before switching
 switch_cooldown = 120  # Minimum seconds between switches
 last_local_failure_time = 0  # Track recent local failures
 local_failure_cooldown = 300  # Seconds to avoid local after failure
+local_success_count = 0  # Track consecutive local health successes
+local_success_required = 3  # Require N successes before switching
 sio = socketio.Client(reconnection=True, reconnection_attempts=0, reconnection_delay=1)
 # Track switch counts per page for interval-based refresh
 page_switch_counts = {}  # page_id -> count since last refresh
@@ -1616,11 +1618,12 @@ def main():
                             local_candidate = None
 
                     if local_candidate and test_server_connection(local_candidate['url'], timeout=2):
+                        local_success_count += 1
                         if local_stable_since == 0:
                             local_stable_since = now
                         stable_for = now - local_stable_since
 
-                        if stable_for >= switch_stable_window:
+                        if stable_for >= switch_stable_window and local_success_count >= local_success_required:
                             # Apply cooldown only if we recently switched successfully
                             if (now - last_switch_time) >= switch_cooldown:
                                 log(f'Local connection stable for {stable_for:.0f}s at {local_candidate["url"]}')
@@ -1633,6 +1636,7 @@ def main():
                                     sio.connect(current_server_url, wait_timeout=10)
                                     last_switch_time = time.time()
                                     local_stable_since = 0
+                                    local_success_count = 0
                                     log(f'Successfully switched to {current_server_url} ({connection_type})')
                                 except Exception as e:
                                     log(f'Failed to switch connections: {e}')
@@ -1643,6 +1647,7 @@ def main():
                                         pass
                     else:
                         local_stable_since = 0
+                        local_success_count = 0
 
             sio.sleep(2)
         except KeyboardInterrupt:
