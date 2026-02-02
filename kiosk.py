@@ -870,7 +870,12 @@ def connect():
     if pause_reason not in ('manual', 'admin', 'login') and not last_paused_before_disconnect:
         paused = False
     send_status()
-    sio.emit('kiosk_connect', {'hostname': get_hostname(), 'ip': get_local_ip()})
+    connect_payload = {'hostname': get_hostname(), 'ip': get_local_ip(), 'connection_type': connection_type}
+    if NETWORK_HELPER_AVAILABLE:
+        ts_ip = network_helper.get_tailscale_ip()
+        if ts_ip:
+            connect_payload['tailscale_ip'] = ts_ip
+    sio.emit('kiosk_connect', connect_payload)
     refresh_pages()
     send_health()
 
@@ -1511,6 +1516,7 @@ def main():
     # Main loop - monitor browser
     last_crash = 0
     last_health = 0
+    last_status = 0
     last_switch_check = 0
     while running:
         try:
@@ -1551,6 +1557,9 @@ def main():
             if now - last_health >= 10:
                 send_health()
                 last_health = now
+            if now - last_status >= 10:
+                send_status()
+                last_status = now
 
             # Check if we've been disconnected too long and need to rescan for servers
             if last_disconnect_time > 0 and not sio.connected:
