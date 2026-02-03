@@ -21,6 +21,7 @@ MASTER_IP="${2:-localhost}"
 HOSTNAME_OVERRIDE="${HOSTNAME_OVERRIDE:-}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SKIP_UPDATES="${SKIP_UPDATES:-}"
+ENABLE_TAILSCALE="${ENABLE_TAILSCALE:-}"
 
 # Allow passing hostname and skip-updates via flags to avoid sudo env issues
 ARGS=("$@")
@@ -37,6 +38,10 @@ while [ $i -lt $# ]; do
             ;;
         --skip-updates)
             SKIP_UPDATES="1"
+            i=$((i+1))
+            ;;
+        --enable-tailscale)
+            ENABLE_TAILSCALE="1"
             i=$((i+1))
             ;;
         *)
@@ -100,6 +105,91 @@ apt-get install -y chromium unclutter xdotool scrot imagemagick x11-apps python3
 
 # Install wtype for Wayland support (optional, may not be in all repos)
 apt-get install -y wtype 2>/dev/null || echo "Note: wtype not available (Wayland support). X11 will be used."
+
+# Install Tailscale if requested
+if [ "$ENABLE_TAILSCALE" = "1" ]; then
+    echo ""
+    echo "[2.5/8] Installing Tailscale..."
+
+    # Check if Tailscale is already installed
+    if command -v tailscale >/dev/null 2>&1; then
+        echo "Tailscale already installed ($(tailscale version))"
+    else
+        echo "Downloading and installing Tailscale..."
+        curl -fsSL https://tailscale.com/install.sh | sh
+
+        if command -v tailscale >/dev/null 2>&1; then
+            echo "Tailscale installed successfully"
+        else
+            echo "Warning: Tailscale installation may have failed"
+        fi
+    fi
+
+    # Start Tailscale if not running
+    if ! systemctl is-active --quiet tailscaled; then
+        echo "Starting Tailscale daemon..."
+        systemctl enable --now tailscaled
+        sleep 2
+    fi
+
+    # Check if Tailscale is authenticated
+    TAILSCALE_STATUS=$(tailscale status 2>&1 || true)
+    if echo "$TAILSCALE_STATUS" | grep -q "Logged out"; then
+        # Check if auth key was provided via environment variable
+        if [ -n "$TAILSCALE_AUTHKEY" ]; then
+            echo ""
+            echo "========================================="
+            echo "AUTHENTICATING TAILSCALE"
+            echo "========================================="
+            echo ""
+            echo "Using provided auth key for automatic authentication..."
+
+            # Authenticate with provided key
+            if tailscale up --authkey "$TAILSCALE_AUTHKEY"; then
+                echo "✓ Tailscale authenticated successfully!"
+                sleep 2
+
+                # Get Tailscale IP
+                TAILSCALE_IP=$(tailscale ip -4 2>/dev/null || echo "unknown")
+                if [ "$TAILSCALE_IP" != "unknown" ]; then
+                    echo "✓ Tailscale IP: $TAILSCALE_IP"
+                fi
+            else
+                echo "✗ Tailscale authentication failed. Please check your auth key."
+                echo "  You can authenticate manually later with: sudo tailscale up"
+            fi
+            echo ""
+        else
+            # No auth key provided - show manual instructions
+            echo ""
+            echo "========================================="
+            echo "TAILSCALE AUTHENTICATION REQUIRED"
+            echo "========================================="
+            echo ""
+            echo "To complete Tailscale setup, run:"
+            echo "  sudo tailscale up"
+            echo ""
+            echo "This will provide an authentication URL."
+            echo "Open the URL in a browser to authorize this device."
+            echo ""
+            echo "You can also use an auth key for unattended setup:"
+            echo "  sudo tailscale up --authkey tskey-auth-xxxxx"
+            echo ""
+            echo "Get auth keys from: https://login.tailscale.com/admin/settings/keys"
+            echo ""
+            echo "========================================="
+            echo ""
+            read -p "Press Enter to continue with installation..."
+        fi
+    else
+        echo "✓ Tailscale is already authenticated"
+        # Try to get Tailscale IP
+        TAILSCALE_IP=$(tailscale ip -4 2>/dev/null || echo "unknown")
+        if [ "$TAILSCALE_IP" != "unknown" ]; then
+            echo "✓ Tailscale IP: $TAILSCALE_IP"
+        fi
+    fi
+fi
 
 echo ""
 echo "[3/8] Creating installation directory..."
@@ -609,6 +699,100 @@ KIOSKEOF
     cat > "$INSTALL_DIR/requirements.txt" << 'EOF'
 python-socketio==5.10.0
 EOF
+
+    # Create network_helper.py for Tailscale support
+    cat > "$INSTALL_DIR/network_helper.py" << 'NETWORKHELPEREOF'
+#!/usr/bin/env python3
+import subprocess, socket, time, json, re
+from typing import List, Dict, Optional, Tuple
+
+def get_tailscale_ip():
+    try:
+        result = subprocess.run(['tailscale', 'ip', '-4'], capture_output=True, text=True, timeout=2)
+        if result.returncode == 0:
+            ip = result.stdout.strip()
+            if ip and ip.startswith('100.'): return ip
+    except: pass
+    return None
+
+def is_tailscale_active():
+    try:
+        result = subprocess.run(['tailscale', 'status'], capture_output=True, text=True, timeout=2)
+        if result.returncode == 0:
+            output = result.stdout.lower()
+            if 'stopped' in output or 'not running' in output: return False
+            return True
+    except: pass
+    return False
+
+def get_tailscale_status():
+    status_info = {'active': False, 'ip': None, 'hostname': None, 'peers': [], 'backend_state': 'Unknown'}
+    try:
+        result = subprocess.run(['tailscale', 'status', '--json'], capture_output=True, text=True, timeout=2)
+        if result.returncode == 0:
+            data = json.loads(result.stdout)
+            self_peer = data.get('Self', {})
+            status_info['ip'] = get_tailscale_ip()
+            status_info['hostname'] = self_peer.get('HostName', '')
+            status_info['backend_state'] = data.get('BackendState', 'Unknown')
+            status_info['active'] = status_info['backend_state'] in ['Running', 'Connected']
+    except: pass
+    return status_info
+
+def get_local_ip():
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.settimeout(0.1)
+        s.connect(('8.8.8.8', 80))
+        local_ip = s.getsockname()[0]
+        s.close()
+        return local_ip
+    except: pass
+    return None
+
+def test_connection_health(url, timeout=3):
+    import urllib.request, urllib.error
+    try:
+        test_url = f"{url.rstrip('/')}/api/status"
+        start_time = time.time()
+        req = urllib.request.Request(test_url, method='GET')
+        with urllib.request.urlopen(req, timeout=timeout) as response:
+            latency = (time.time() - start_time) * 1000
+            if response.status == 200: return (True, latency)
+    except: pass
+    return (False, float('inf'))
+
+def get_connection_candidates(configured_url):
+    candidates = []
+    configured_host, configured_port = None, '5000'
+    if configured_url:
+        url_without_protocol = configured_url.replace('http://', '').replace('https://', '')
+        if ':' in url_without_protocol:
+            parts = url_without_protocol.split(':')
+            configured_host, configured_port = parts[0], parts[1].rstrip('/')
+        else:
+            configured_host = url_without_protocol.rstrip('/')
+    if configured_host and (configured_host.startswith('192.168.') or configured_host.startswith('10.') or configured_host.startswith('172.')):
+        candidates.append({'url': f'http://{configured_host}:{configured_port}', 'type': 'local', 'priority': 1})
+    if configured_host and configured_host.startswith('100.'):
+        candidates.append({'url': f'http://{configured_host}:{configured_port}', 'type': 'tailscale', 'priority': 2})
+    if not candidates and configured_url:
+        url_type = 'unknown'
+        if configured_host:
+            if configured_host.startswith('100.'): url_type = 'tailscale'
+            elif configured_host.startswith(('192.168.', '10.', '172.')): url_type = 'local'
+        candidates.append({'url': configured_url, 'type': url_type, 'priority': 1})
+    candidates.sort(key=lambda x: x['priority'])
+    return candidates
+
+def get_optimal_server_url(configured_url, test_timeout=2):
+    candidates = get_connection_candidates(configured_url)
+    for candidate in candidates:
+        is_reachable, latency = test_connection_health(candidate['url'], timeout=test_timeout)
+        if is_reachable:
+            return {**candidate, 'latency_ms': round(latency, 2)}
+    return None
+NETWORKHELPEREOF
 fi
 
 if [ "$MODE" = "master" ] && [ ! -f "$INSTALL_DIR/server.py" ]; then
@@ -694,7 +878,7 @@ if [ -f /etc/argononed.conf ]; then
 #
 # Argon Fan Speed Configuration (CPU)
 #
-40=30
+45=30
 55=55
 65=100
 EOF
