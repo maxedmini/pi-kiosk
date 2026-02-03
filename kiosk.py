@@ -318,6 +318,30 @@ def build_url(path):
     return f"{active_url}{path}"
 
 
+def apply_tailscale_authkey(authkey):
+    """Apply a new Tailscale auth key."""
+    if not authkey:
+        return False
+    if not shutil.which('tailscale'):
+        log('Tailscale not installed; cannot apply auth key')
+        return False
+    try:
+        log('Applying Tailscale auth key')
+        result = subprocess.run(
+            ['sudo', 'tailscale', 'up', '--authkey', authkey],
+            capture_output=True, text=True, timeout=20
+        )
+        if result.returncode != 0:
+            stderr = (result.stderr or '').strip()
+            log(f'Tailscale auth failed: {stderr or "unknown error"}')
+            return False
+        log('Tailscale auth updated')
+        return True
+    except Exception as e:
+        log(f'Tailscale auth error: {e}')
+        return False
+
+
 def send_status():
     """Send status to server."""
     page = get_current_page()
@@ -1063,6 +1087,10 @@ def on_control(data):
         admin_mode_active = False
         exit_admin_mode_actions()
         send_status()
+
+    elif action == 'tailscale_auth':
+        authkey = data.get('authkey', '')
+        apply_tailscale_authkey(authkey)
 
 
 @sio.on('wifi_config')

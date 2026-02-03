@@ -56,15 +56,15 @@ connected_displays = {}
 def load_settings():
     """Load server settings from disk."""
     if not os.path.exists(SETTINGS_FILE):
-        return {'sync_enabled': True}
+        return {'sync_enabled': True, 'tailscale_authkey': None, 'tailscale_authkey_set_at': None}
     try:
         with open(SETTINGS_FILE, 'r') as f:
             data = json.load(f)
         if isinstance(data, dict):
-            return {**{'sync_enabled': True}, **data}
+            return {**{'sync_enabled': True, 'tailscale_authkey': None, 'tailscale_authkey_set_at': None}, **data}
     except Exception:
         pass
-    return {'sync_enabled': True}
+    return {'sync_enabled': True, 'tailscale_authkey': None, 'tailscale_authkey_set_at': None}
 
 
 def save_settings(settings):
@@ -1139,7 +1139,7 @@ def control_kiosk():
         return jsonify({'error': 'Action is required'}), 400
 
     action = data['action']
-    valid_actions = ['pause', 'resume', 'next', 'prev', 'refresh', 'goto', 'login_mode', 'exit_login_mode', 'admin_mode', 'exit_admin_mode']
+    valid_actions = ['pause', 'resume', 'next', 'prev', 'refresh', 'goto', 'login_mode', 'exit_login_mode', 'admin_mode', 'exit_admin_mode', 'tailscale_auth']
 
     if action not in valid_actions:
         return jsonify({'error': f'Invalid action. Must be one of: {valid_actions}'}), 400
@@ -1147,6 +1147,8 @@ def control_kiosk():
     payload = {'action': action}
     if action == 'goto' and 'page_id' in data:
         payload['page_id'] = data['page_id']
+    if action == 'tailscale_auth' and 'authkey' in data:
+        payload['authkey'] = data['authkey']
 
     # Target specific display or broadcast to all
     display_id = data.get('display_id')
@@ -1193,6 +1195,31 @@ def sync_settings():
     SETTINGS['sync_enabled'] = sync_enabled
     save_settings(SETTINGS)
     return jsonify({'sync_enabled': SETTINGS.get('sync_enabled', True)})
+
+
+@app.route('/api/settings/tailscale', methods=['GET', 'POST'])
+def tailscale_settings():
+    """Get or set Tailscale auth key (stored server-side)."""
+    if request.method == 'GET':
+        has_key = bool(SETTINGS.get('tailscale_authkey'))
+        return jsonify({'has_key': has_key})
+
+    data = request.get_json(silent=True) or {}
+    authkey = (data.get('authkey') or '').strip()
+    if not authkey:
+        return jsonify({'error': 'Auth key is required'}), 400
+
+    SETTINGS['tailscale_authkey'] = authkey
+    SETTINGS['tailscale_authkey_set_at'] = datetime.now().isoformat()
+    save_settings(SETTINGS)
+
+    if data.get('push'):
+        socketio.emit('control', {
+            'action': 'tailscale_auth',
+            'authkey': authkey
+        })
+
+    return jsonify({'success': True, 'pushed': bool(data.get('push'))})
 
 
 # WebSocket Events

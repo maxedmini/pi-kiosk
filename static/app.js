@@ -23,6 +23,10 @@ const editModal = document.getElementById('editModal');
 const editPageForm = document.getElementById('editPageForm');
 const settingsModal = document.getElementById('settingsModal');
 const settingsForm = document.getElementById('settingsForm');
+const tailscaleForm = document.getElementById('tailscaleForm');
+const tailscaleAuthKey = document.getElementById('tailscaleAuthKey');
+const tailscaleKeyStatus = document.getElementById('tailscaleKeyStatus');
+const tailscaleStatus = document.getElementById('tailscaleStatus');
 const filePreview = document.getElementById('filePreview');
 const installIp = document.getElementById('installIp');
 const installIp2 = document.getElementById('installIp2');
@@ -1087,6 +1091,7 @@ btnSettings.addEventListener('click', () => {
     document.getElementById('settingsHostname').value = systemInfo.hostname;
     document.getElementById('settingsIp').value = systemInfo.ip;
     loadSyncSetting();
+    loadTailscaleSetting();
     settingsModal.classList.add('show');
 });
 
@@ -1167,6 +1172,17 @@ async function loadSyncSetting() {
         document.getElementById('settingsSyncEnabled').checked = !!data.sync_enabled;
     } catch (error) {
         console.error('Error loading sync setting:', error);
+    }
+}
+
+async function loadTailscaleSetting() {
+    if (!tailscaleKeyStatus) return;
+    try {
+        const data = await fetchJson('/api/settings/tailscale');
+        const hasKey = !!data.has_key;
+        tailscaleKeyStatus.textContent = hasKey ? 'Key stored on server' : 'No key stored';
+    } catch (error) {
+        console.error('Error loading Tailscale setting:', error);
     }
 }
 
@@ -1321,6 +1337,38 @@ wifiForm.addEventListener('submit', async (e) => {
     } catch (error) {
         console.error('Error pushing WiFi:', error);
         wifiStatus.innerHTML = `<span style="color: #ef4444;">Error: ${error.message}</span>`;
+    }
+});
+
+tailscaleForm?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const key = tailscaleAuthKey?.value.trim();
+    if (!key) {
+        alert('Please enter a Tailscale auth key');
+        return;
+    }
+    if (!confirm('Save this key and push to all displays now?')) {
+        return;
+    }
+    try {
+        if (tailscaleStatus) {
+            tailscaleStatus.style.display = 'block';
+            tailscaleStatus.textContent = 'Saving and pushing...';
+        }
+        await fetch('/api/settings/tailscale', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ authkey: key, push: true })
+        });
+        if (tailscaleAuthKey) tailscaleAuthKey.value = '';
+        if (tailscaleKeyStatus) tailscaleKeyStatus.textContent = 'Key stored on server';
+        if (tailscaleStatus) tailscaleStatus.textContent = 'Pushed to all displays';
+    } catch (error) {
+        console.error('Error pushing Tailscale key:', error);
+        if (tailscaleStatus) {
+            tailscaleStatus.style.display = 'block';
+            tailscaleStatus.textContent = 'Failed to push Tailscale key';
+        }
     }
 });
 

@@ -391,6 +391,22 @@
                 </div>
             </form>
             <div id="wifiStatus" style="margin-top: 10px; display: none;"></div>
+            <hr style="margin: 20px 0; border-color: #374151;">
+            <h4 style="margin-bottom: 15px;">Tailscale Auth Key</h4>
+            <p style="font-size: 0.875rem; color: #94a3b8; margin-bottom: 15px;">
+                Store a new Tailscale auth key and push it to all displays if the current one expires.
+            </p>
+            <form id="tailscaleForm">
+                <div class="form-group">
+                    <label for="tailscaleAuthKey">Auth Key</label>
+                    <input type="password" id="tailscaleAuthKey" placeholder="tskey-...">
+                    <small id="tailscaleKeyStatus" style="display:block; margin-top:6px; color:#94a3b8;">No key stored</small>
+                </div>
+                <div class="modal-actions">
+                    <button type="submit" class="btn btn-primary">Save & Push to All Displays</button>
+                </div>
+            </form>
+            <div id="tailscaleStatus" style="margin-top: 10px; display: none;"></div>
         </div>
     </div>
 
