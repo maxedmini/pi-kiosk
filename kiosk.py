@@ -709,7 +709,7 @@ def get_enabled_urls():
             urls.append(build_url(page['url']))
     # Fallback to default image if no pages available
     if not urls:
-        urls = [build_url('/static/default.png')]
+        urls = [build_url('/static/backup.html')]
     return urls
 
 
@@ -1470,7 +1470,7 @@ def signal_handler(sig, frame):
 def main():
     global running, server_url, server_name, DISPLAY, safe_mode_until, crash_times
     global current_server_url, connection_type, last_disconnect_time
-    global last_switch_time, local_stable_since
+    global last_switch_time, local_stable_since, local_success_count
 
     parser = argparse.ArgumentParser(description='Pi Kiosk Display (Tab-Based)')
     parser.add_argument('--server', '-s', default=DEFAULT_SERVER_URL,
@@ -1520,6 +1520,14 @@ def main():
 
     hide_cursor()
     disable_screen_blanking()
+
+    # Show backup image while waiting for server
+    backup_page = '/opt/pi-kiosk/static/backup.html'
+    if os.path.exists(backup_page):
+        log('Showing backup image while waiting for server...')
+        launch_browser_with_tabs([f'file://{backup_page}'])
+    else:
+        log(f'Backup page not found at {backup_page}')
 
     # Wait for server
     log('Waiting for server...')
@@ -1586,7 +1594,7 @@ def main():
                     log('Entering safe mode due to repeated crashes...')
                     safe_mode_until = now + 300
                     crash_times.clear()
-                    urls = [build_url('/static/default.png')]
+                    urls = [build_url('/static/backup.html')]
                     launch_browser_with_tabs(urls)
                 else:
                     if now - last_crash < 10:
@@ -1594,7 +1602,7 @@ def main():
                         time.sleep(10)
                     last_crash = now
                     if now < safe_mode_until:
-                        urls = [build_url('/static/default.png')]
+                        urls = [build_url('/static/backup.html')]
                     else:
                         log('Relaunching browser...')
                         urls = get_enabled_urls()

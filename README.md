@@ -154,6 +154,229 @@ The kiosk uses a persistent browser profile, so login sessions are saved. To log
 
 ---
 
+## Cross-Network Access with Tailscale
+
+**New Feature**: Access your pi-kiosk server remotely from anywhere using Tailscale VPN!
+
+### What is Tailscale?
+
+Tailscale creates a secure private network between your devices, allowing you to access your pi-kiosk server from home, office, or anywhere with internet - no port forwarding required!
+
+### Use Cases
+
+- **Remote admin**: Manage your venue's displays from home
+- **Travel**: Update content while away
+- **Multiple locations**: Server and clients on different networks
+- **Mobile management**: Control displays from your phone anywhere
+
+### Setup (One-Time)
+
+#### 1. Install Master Pi with Tailscale
+
+```bash
+# Install pi-kiosk with Tailscale enabled
+sudo ./install.sh master --enable-tailscale
+
+# Follow the authentication URL shown (open in browser on any device)
+# This authorizes the Pi on your Tailscale network
+```
+
+After installation, the Pi will have two IPs:
+- **Local IP**: `192.168.x.x` (for same-network access)
+- **Tailscale IP**: `100.x.x.x` (for remote access from anywhere)
+
+#### 2. Install Client Pis with Tailscale
+
+```bash
+# From same network (faster initial setup)
+curl -sSL http://192.168.1.100:5000/install.sh | \
+  sudo bash -s -- client 192.168.1.100 --enable-tailscale
+
+# OR from different network (using Tailscale IP)
+curl -sSL http://100.64.0.1:5000/install.sh | \
+  sudo bash -s -- client 100.64.0.1 --enable-tailscale
+
+# Follow the authentication URL for this client
+```
+
+**Smart Connection**: Clients automatically use local network when available (fastest), and fall back to Tailscale when remote!
+
+#### 3. Setup Admin Access (Laptop/Phone)
+
+**On Your Laptop:**
+```bash
+# macOS
+brew install tailscale
+tailscale up  # Follow auth URL
+
+# Windows
+# Download from https://tailscale.com/download
+# Install and sign in
+
+# Linux
+curl -fsSL https://tailscale.com/install.sh | sh
+tailscale up
+```
+
+**On Your Phone:**
+- Install Tailscale app from App Store / Play Store
+- Sign in with same account
+- Toggle Tailscale ON
+
+#### 4. Access from Anywhere
+
+Once Tailscale is installed on your admin device:
+
+```
+# Access web interface using Tailscale IP
+http://100.64.0.1:5000
+```
+
+**Bookmark this URL** - it works from anywhere with internet!
+
+### How It Works (Hybrid Mode)
+
+The pi-kiosk hybrid connection system automatically optimizes your network path:
+
+**For Clients (Slaves):**
+1. Tries local network first (192.168.x.x) - fastest, <1ms latency
+2. Falls back to Tailscale (100.x.x.x) if local fails - ~10-30ms latency
+3. Auto-switches to local when available (e.g., if Pi moves networks)
+4. Seamless reconnection with no service interruption
+
+**For Admin (Web Interface):**
+- **Same network**: Connect via local IP or Tailscale IP
+- **Different network**: Use Tailscale IP - works from anywhere!
+- **Mobile**: Access from phone/tablet via Tailscale app
+
+**Connection Type Display:**
+The web interface shows how each display is connected:
+- `(local)` - Direct local network connection
+- `(tailscale)` - Connected via Tailscale VPN
+
+### Example Scenarios
+
+#### Scenario 1: Remote Admin Management (Common)
+**Setup**: Server + 3 clients all on venue WiFi (192.168.1.x)
+
+**Admin Actions**:
+- **At venue**: Access `http://192.168.1.100:5000` OR `http://100.64.0.1:5000`
+- **At home**: Access `http://100.64.0.1:5000` (works automatically!)
+- **On phone**: Open Tailscale app, visit `http://100.64.0.1:5000` in browser
+- **Traveling**: From hotel/airport, same Tailscale URL works
+
+**Benefit**: Manage displays from anywhere without port forwarding!
+
+#### Scenario 2: Mixed Deployment
+**Setup**:
+- Server at office (192.168.10.50)
+- 2 clients at office (use local network - fast)
+- 1 client at remote location (uses Tailscale)
+
+**Result**: Office clients connect locally, remote client via Tailscale, all managed from one interface!
+
+#### Scenario 3: Trade Show
+- Set up on trade show WiFi
+- Admin monitors from booth OR hotel via Tailscale
+- After show, move clients to different locations → auto-switch to Tailscale
+
+### Getting Your Tailscale IP
+
+```bash
+# On the Pi
+tailscale ip -4
+
+# Or check the web interface header
+# Shows both local and Tailscale IPs
+```
+
+### Daily Usage
+
+Once set up, remote access is seamless:
+
+1. Open Tailscale app on your device
+2. Visit `http://100.64.0.1:5000` in browser
+3. Manage displays normally!
+
+No VPN configuration, no port forwarding, no complex setup - it just works!
+
+### Troubleshooting Tailscale
+
+#### Check Tailscale Status
+```bash
+# On the Pi
+tailscale status
+
+# Should show "logged in" and list connected devices
+```
+
+#### Tailscale Not Connected
+```bash
+# Restart Tailscale
+sudo systemctl restart tailscaled
+
+# Re-authenticate
+sudo tailscale up
+```
+
+#### Can't Access via Tailscale IP
+1. Verify Tailscale is running on both server and admin device:
+   ```bash
+   tailscale status
+   ```
+2. Check firewall isn't blocking (Tailscale handles NAT automatically)
+3. Ensure both devices are on same Tailscale network (same account)
+4. Try pinging the Tailscale IP:
+   ```bash
+   ping 100.64.0.1
+   ```
+
+#### Client Stuck on Tailscale (Want Local)
+Connection optimization runs every 60 seconds. If client should be on local network but uses Tailscale:
+
+1. Verify both are on same LAN
+2. Check server port 5000 is accessible on local network:
+   ```bash
+   curl http://192.168.1.100:5000/api/status
+   ```
+3. Wait up to 60 seconds for automatic optimization
+4. Or restart client service to reconnect immediately:
+   ```bash
+   sudo systemctl restart pi-kiosk
+   ```
+
+#### View Connection Type in Logs
+```bash
+# Check which connection type is being used
+journalctl -u pi-kiosk -f
+
+# Look for lines like:
+# "Connected successfully via http://192.168.1.100:5000 (local)"
+# "Connected successfully via http://100.64.0.1:5000 (tailscale)"
+```
+
+### Security Notes
+
+- **Encrypted**: Tailscale uses WireGuard (military-grade encryption)
+- **Authenticated**: Each device requires OAuth authorization
+- **Private**: No ports exposed to public internet
+- **ACLs**: Optional fine-grained access control available
+- **Free**: Up to 100 devices at no cost
+
+### Tailscale vs Port Forwarding
+
+| Feature | Tailscale (Recommended) | Port Forwarding |
+|---------|-------------------------|-----------------|
+| Setup Complexity | Easy (one command) | Complex (router config) |
+| Security | Encrypted by default | Manual setup required |
+| Works on cellular | ✓ Yes | ✗ No |
+| Works behind NAT | ✓ Yes | ✗ Needs static IP |
+| Multiple locations | ✓ Easy | ✗ Hard |
+| Mobile access | ✓ Built-in app | ✗ Manual VPN |
+| Cost | Free (100 devices) | Free (if you have static IP) |
+
+---
+
 ## System Settings
 
 ### Changing Hostname

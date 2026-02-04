@@ -788,7 +788,7 @@ def get_page_urls():
 
     # Fallback to default image if no pages available
     if not urls:
-        urls = ['/static/default.png']
+        urls = ['/static/backup.html']
         durations = [30]
 
     return jsonify({
@@ -1393,7 +1393,7 @@ def handle_request_pages(data=None):
     if not result:
         result = [{
             'id': 0,
-            'url': '/static/default.png',
+            'url': '/static/backup.html',
             'name': 'Default',
             'duration': 30,
             'type': 'image',

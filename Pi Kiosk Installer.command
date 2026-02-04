@@ -72,6 +72,24 @@ read -p "Skip system updates? (y/n) [n]: " SKIP_UPDATES_CHOICE
 SKIP_UPDATES_CHOICE=${SKIP_UPDATES_CHOICE:-n}
 
 echo ""
+print_color $YELLOW "Enable Tailscale for remote access?"
+echo "  Allows you to manage displays from anywhere (home, travel, etc.)"
+echo "  Recommended for remote admin access"
+echo ""
+read -p "Enable Tailscale? (y/n) [y]: " ENABLE_TAILSCALE
+ENABLE_TAILSCALE=${ENABLE_TAILSCALE:-y}
+
+TAILSCALE_AUTHKEY=""
+if [[ "$ENABLE_TAILSCALE" =~ ^[Yy]$ ]]; then
+    echo ""
+    print_color $BLUE "Optional: Provide Tailscale auth key for automatic setup"
+    echo "  (Leave blank to authenticate manually via browser after install)"
+    echo "  Get auth keys from: https://login.tailscale.com/admin/settings/keys"
+    echo ""
+    read -p "Tailscale auth key (optional): " TAILSCALE_AUTHKEY
+fi
+
+echo ""
 print_color $YELLOW "Select installation mode:"
 echo "  1) Master - Server + Display (first Pi)"
 echo "  2) Client - Display only (connects to master)"
@@ -103,6 +121,11 @@ echo "  Pi Address: $PI_USER@$PI_HOST"
 echo "  Mode: $INSTALL_MODE"
 [ -n "$MASTER_IP" ] && echo "  Master IP: $MASTER_IP"
 [ -n "$HOSTNAME_OVERRIDE" ] && echo "  Hostname: $HOSTNAME_OVERRIDE"
+if [[ "$ENABLE_TAILSCALE" =~ ^[Yy]$ ]]; then
+    print_color $GREEN "  Tailscale: ENABLED (remote access from anywhere)"
+else
+    echo "  Tailscale: Disabled (local network only)"
+fi
 echo ""
 
 read -p "Proceed with installation? (y/n) [y]: " CONFIRM
@@ -144,10 +167,18 @@ if [ "$INSTALL_MODE" = "master" ]; then
         if [ -n "$HOSTNAME_OVERRIDE" ]; then
             INSTALL_FLAGS="$INSTALL_FLAGS --hostname \"$HOSTNAME_OVERRIDE\""
         fi
+        if [[ "$ENABLE_TAILSCALE" =~ ^[Yy]$ ]]; then
+            INSTALL_FLAGS="$INSTALL_FLAGS --enable-tailscale"
+        fi
+        # Pass Tailscale auth key as environment variable if provided
+        TAILSCALE_ENV=""
+        if [ -n "$TAILSCALE_AUTHKEY" ]; then
+            TAILSCALE_ENV="TAILSCALE_AUTHKEY='$TAILSCALE_AUTHKEY'"
+        fi
         if [ -n "$INSTALL_FLAGS" ]; then
-            SSH_INSTALL_CMD="${SSH_INSTALL_CMD}sudo bash $REMOTE_DIR/install.sh $INSTALL_MODE $INSTALL_FLAGS; "
+            SSH_INSTALL_CMD="${SSH_INSTALL_CMD}$TAILSCALE_ENV sudo -E bash $REMOTE_DIR/install.sh $INSTALL_MODE $INSTALL_FLAGS; "
         else
-            SSH_INSTALL_CMD="${SSH_INSTALL_CMD}sudo bash $REMOTE_DIR/install.sh $INSTALL_MODE; "
+            SSH_INSTALL_CMD="${SSH_INSTALL_CMD}$TAILSCALE_ENV sudo -E bash $REMOTE_DIR/install.sh $INSTALL_MODE; "
         fi
         SSH_INSTALL_CMD="${SSH_INSTALL_CMD}STATUS=\$?; rm -rf $REMOTE_DIR $REMOTE_TARBALL; exit \$STATUS"
         ssh $SSH_OPTS -t "$PI_USER@$PI_HOST" "$SSH_INSTALL_CMD"
@@ -204,10 +235,18 @@ else
         if [ -n "$HOSTNAME_OVERRIDE" ]; then
             INSTALL_FLAGS="$INSTALL_FLAGS --hostname \"$HOSTNAME_OVERRIDE\""
         fi
+        if [[ "$ENABLE_TAILSCALE" =~ ^[Yy]$ ]]; then
+            INSTALL_FLAGS="$INSTALL_FLAGS --enable-tailscale"
+        fi
+        # Pass Tailscale auth key as environment variable if provided
+        TAILSCALE_ENV=""
+        if [ -n "$TAILSCALE_AUTHKEY" ]; then
+            TAILSCALE_ENV="TAILSCALE_AUTHKEY='$TAILSCALE_AUTHKEY'"
+        fi
         if [ -n "$INSTALL_FLAGS" ]; then
-            SSH_INSTALL_CMD="${SSH_INSTALL_CMD}sudo bash $REMOTE_DIR/install.sh $INSTALL_MODE $MASTER_IP $INSTALL_FLAGS; "
+            SSH_INSTALL_CMD="${SSH_INSTALL_CMD}$TAILSCALE_ENV sudo -E bash $REMOTE_DIR/install.sh $INSTALL_MODE $MASTER_IP $INSTALL_FLAGS; "
         else
-            SSH_INSTALL_CMD="${SSH_INSTALL_CMD}sudo bash $REMOTE_DIR/install.sh $INSTALL_MODE $MASTER_IP; "
+            SSH_INSTALL_CMD="${SSH_INSTALL_CMD}$TAILSCALE_ENV sudo -E bash $REMOTE_DIR/install.sh $INSTALL_MODE $MASTER_IP; "
         fi
         SSH_INSTALL_CMD="${SSH_INSTALL_CMD}STATUS=\$?; rm -rf $REMOTE_DIR $REMOTE_TARBALL; exit \$STATUS"
         ssh $SSH_OPTS -t "$PI_USER@$PI_HOST" "$SSH_INSTALL_CMD"
@@ -233,6 +272,27 @@ if [ $RESULT -eq 0 ]; then
     print_color $GREEN "║              Installation Complete!                          ║"
     print_color $GREEN "╚══════════════════════════════════════════════════════════════╝"
     echo ""
+
+    if [[ "$ENABLE_TAILSCALE" =~ ^[Yy]$ ]]; then
+        print_color $YELLOW "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        print_color $YELLOW "  TAILSCALE AUTHENTICATION REQUIRED"
+        print_color $YELLOW "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo ""
+        echo "After reboot, you need to authenticate Tailscale:"
+        echo ""
+        echo "  1. SSH to Pi: ssh $PI_USER@$PI_HOST"
+        echo "  2. Run: sudo tailscale up"
+        echo "  3. Open the authentication URL in your browser"
+        echo "  4. Authorize the device in your Tailscale account"
+        echo ""
+        print_color $GREEN "Once authenticated, you can access from anywhere:"
+        echo "  • Local: http://$PI_HOST:5000 (same network)"
+        echo "  • Remote: http://100.x.x.x:5000 (Tailscale IP - shown after auth)"
+        echo ""
+        print_color $YELLOW "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo ""
+    fi
+
     if [ "$INSTALL_MODE" = "master" ]; then
         echo "Next steps:"
         echo "  1. Reboot your Pi: ssh $PI_USER@$PI_HOST 'sudo reboot'"
@@ -240,6 +300,9 @@ if [ $RESULT -eq 0 ]; then
             echo "  2. Access web interface at: http://$PI_HOST:5000"
         else
             echo "  2. Access web interface at: http://$FINAL_HOSTNAME.local:5000 (after reboot)"
+        fi
+        if [[ "$ENABLE_TAILSCALE" =~ ^[Yy]$ ]]; then
+            echo "  3. Complete Tailscale authentication (see above)"
         fi
         echo ""
         echo "To add more display clients, run this installer again"
@@ -252,6 +315,9 @@ if [ $RESULT -eq 0 ]; then
         echo "Next steps:"
         echo "  1. Reboot your Pi: ssh $PI_USER@$PI_HOST 'sudo reboot'"
         echo "  2. The display will connect to: http://$MASTER_IP:5000"
+        if [[ "$ENABLE_TAILSCALE" =~ ^[Yy]$ ]]; then
+            echo "  3. Complete Tailscale authentication (see above)"
+        fi
     fi
 
     echo ""
