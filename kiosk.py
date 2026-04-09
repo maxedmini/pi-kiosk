@@ -454,7 +454,9 @@ def clear_profile_locks():
     for name in ('SingletonLock', 'SingletonSocket', 'SingletonCookie'):
         path = os.path.join(PROFILE_DIR, name)
         try:
-            if os.path.exists(path):
+            # Chromium uses singleton symlinks that can remain as broken links
+            # after an unclean shutdown. lexists() catches those stale entries.
+            if os.path.lexists(path):
                 os.remove(path)
         except Exception:
             pass
