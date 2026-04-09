@@ -356,7 +356,7 @@
                 <div class="modal-actions">
                     <button type="button" class="btn btn-danger" id="btnReboot">Reboot Pi</button>
                     <button type="button" class="btn btn-secondary" id="cancelSettings">Cancel</button>
-                    <button type="submit" class="btn btn-primary">Save Hostname</button>
+                    <button type="submit" class="btn btn-primary">Save Settings</button>
                 </div>
             </form>
             <hr style="margin: 20px 0; border-color: #374151;">
@@ -407,6 +407,43 @@
                 </div>
             </form>
             <div id="tailscaleStatus" style="margin-top: 10px; display: none;"></div>
+            <hr style="margin: 20px 0; border-color: #374151;">
+            <h4 style="margin-bottom: 15px;">GitHub Backup</h4>
+            <p style="font-size: 0.875rem; color: #94a3b8; margin-bottom: 15px;">
+                Automatically upload the kiosk database, uploaded images, and saved manager settings to GitHub after changes.
+                On reinstall, run the master installer with the same repo, branch, and path to restore the latest backup.
+            </p>
+            <div class="form-group">
+                <label>
+                    <input type="checkbox" id="githubSyncEnabled"> Enable GitHub backup
+                </label>
+            </div>
+            <div class="form-group">
+                <label for="githubSyncRepo">Repository</label>
+                <input type="text" id="githubSyncRepo" placeholder="owner/repo">
+            </div>
+            <div class="form-group">
+                <label for="githubSyncBranch">Branch</label>
+                <input type="text" id="githubSyncBranch" placeholder="main">
+            </div>
+            <div class="form-group">
+                <label for="githubSyncPath">Backup Path</label>
+                <input type="text" id="githubSyncPath" placeholder="backups/pi-kiosk-state.tgz">
+                <small>Example reinstall: <code>sudo ./install.sh master --restore-github-repo owner/repo --restore-github-branch main --restore-github-path backups/pi-kiosk-state.tgz</code></small>
+            </div>
+            <form id="githubSyncForm">
+                <div class="form-group">
+                    <label for="githubSyncToken">GitHub Token</label>
+                    <input type="password" id="githubSyncToken" placeholder="github_pat_...">
+                    <small id="githubSyncTokenStatus" style="display:block; margin-top:6px; color:#94a3b8;">No token stored</small>
+                </div>
+                <div class="modal-actions">
+                    <button type="submit" class="btn btn-primary" id="btnGithubSave">Save GitHub Backup</button>
+                    <button type="button" class="btn btn-secondary" id="btnGithubBackupNow">Backup Now</button>
+                    <button type="button" class="btn btn-warning" id="btnGithubClearToken">Clear Token</button>
+                </div>
+            </form>
+            <div id="githubSyncStatus" style="margin-top: 10px; display: none;"></div>
         </div>
     </div>
 

@@ -27,6 +27,14 @@ const tailscaleForm = document.getElementById('tailscaleForm');
 const tailscaleAuthKey = document.getElementById('tailscaleAuthKey');
 const tailscaleKeyStatus = document.getElementById('tailscaleKeyStatus');
 const tailscaleStatus = document.getElementById('tailscaleStatus');
+const githubSyncForm = document.getElementById('githubSyncForm');
+const githubSyncEnabled = document.getElementById('githubSyncEnabled');
+const githubSyncRepo = document.getElementById('githubSyncRepo');
+const githubSyncBranch = document.getElementById('githubSyncBranch');
+const githubSyncPath = document.getElementById('githubSyncPath');
+const githubSyncToken = document.getElementById('githubSyncToken');
+const githubSyncTokenStatus = document.getElementById('githubSyncTokenStatus');
+const githubSyncStatus = document.getElementById('githubSyncStatus');
 const filePreview = document.getElementById('filePreview');
 const installIp = document.getElementById('installIp');
 const installIp2 = document.getElementById('installIp2');
@@ -40,6 +48,8 @@ const btnSync = document.getElementById('btnSync');
 const pauseIcon = document.getElementById('pauseIcon');
 const pauseText = document.getElementById('pauseText');
 const btnSettings = document.getElementById('btnSettings');
+const btnGithubBackupNow = document.getElementById('btnGithubBackupNow');
+const btnGithubClearToken = document.getElementById('btnGithubClearToken');
 const copyInstallCmd = document.getElementById('copyInstallCmd');
 const selectAllPages = document.getElementById('selectAllPages');
 const selectedCount = document.getElementById('selectedCount');
@@ -1092,11 +1102,47 @@ btnSettings.addEventListener('click', () => {
     document.getElementById('settingsIp').value = systemInfo.ip;
     loadSyncSetting();
     loadTailscaleSetting();
+    loadGithubSyncSetting();
     settingsModal.classList.add('show');
 });
 
 function closeSettingsModal() {
     settingsModal.classList.remove('show');
+}
+
+async function saveGithubSyncSettings(options = {}) {
+    const githubEnabled = githubSyncEnabled.checked;
+    const githubRepoValue = githubSyncRepo.value.trim();
+    const githubBranchValue = githubSyncBranch.value.trim() || 'main';
+    const githubPathValue = githubSyncPath.value.trim() || 'backups/pi-kiosk-state.tgz';
+    const githubTokenValue = githubSyncToken.value.trim();
+    const payload = {
+        enabled: options.enabledOverride ?? githubEnabled,
+        repo: githubRepoValue,
+        branch: githubBranchValue,
+        path: githubPathValue
+    };
+
+    if (options.clearToken) {
+        payload.clear_token = true;
+    } else if (githubTokenValue) {
+        payload.token = githubTokenValue;
+    }
+
+    const response = await fetch('/api/settings/github-sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+    });
+
+    const result = await response.json();
+    if (!response.ok) {
+        throw new Error(result.error || 'Failed to save GitHub backup settings');
+    }
+
+    renderGithubSyncState(result);
+    githubSyncToken.value = '';
+    return result;
 }
 
 document.getElementById('closeSettings').addEventListener('click', closeSettingsModal);
@@ -1162,7 +1208,19 @@ settingsForm.addEventListener('submit', async (e) => {
         closeSettingsModal();
     } catch (error) {
         console.error('Error changing hostname:', error);
-        alert('Failed to change hostname: ' + error.message);
+        alert('Failed to save system settings: ' + error.message);
+    }
+});
+
+githubSyncForm?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    try {
+        setStatusMessage(githubSyncStatus, 'Saving GitHub backup settings...');
+        const data = await saveGithubSyncSettings();
+        setStatusMessage(githubSyncStatus, data.last_message || 'GitHub backup settings saved.');
+    } catch (error) {
+        console.error('Error saving GitHub backup settings:', error);
+        setStatusMessage(githubSyncStatus, `Failed to save GitHub backup settings: ${error.message}`, true);
     }
 });
 
@@ -1185,6 +1243,77 @@ async function loadTailscaleSetting() {
         console.error('Error loading Tailscale setting:', error);
     }
 }
+
+function setStatusMessage(el, message, isError = false) {
+    if (!el) return;
+    if (!message) {
+        el.style.display = 'none';
+        el.textContent = '';
+        return;
+    }
+    el.style.display = 'block';
+    el.textContent = message;
+    el.style.color = isError ? '#fca5a5' : '#86efac';
+}
+
+function renderGithubSyncState(data) {
+    if (!data) return;
+    githubSyncEnabled.checked = !!data.enabled;
+    githubSyncRepo.value = data.repo || '';
+    githubSyncBranch.value = data.branch || 'main';
+    githubSyncPath.value = data.path || 'backups/pi-kiosk-state.tgz';
+    githubSyncTokenStatus.textContent = data.has_token ? 'Token stored on server' : 'No token stored';
+
+    let message = '';
+    let isError = false;
+    if (data.last_error) {
+        message = `Last backup failed: ${data.last_error}`;
+        isError = true;
+    } else if (data.last_uploaded_at) {
+        message = `Last backup: ${new Date(data.last_uploaded_at).toLocaleString()}`;
+        if (data.last_message) {
+            message += ` | ${data.last_message}`;
+        }
+    } else if (data.last_message) {
+        message = data.last_message;
+    }
+    setStatusMessage(githubSyncStatus, message, isError);
+}
+
+async function loadGithubSyncSetting() {
+    if (!githubSyncRepo) return;
+    try {
+        const data = await fetchJson('/api/settings/github-sync');
+        renderGithubSyncState(data);
+    } catch (error) {
+        console.error('Error loading GitHub sync setting:', error);
+        setStatusMessage(githubSyncStatus, `Failed to load GitHub backup settings: ${error.message}`, true);
+    }
+}
+
+btnGithubBackupNow?.addEventListener('click', async () => {
+    try {
+        setStatusMessage(githubSyncStatus, 'Uploading backup...');
+        const data = await fetchJson('/api/settings/github-sync/backup', {
+            method: 'POST'
+        });
+        renderGithubSyncState(data);
+    } catch (error) {
+        console.error('Error running GitHub backup:', error);
+        setStatusMessage(githubSyncStatus, `Backup failed: ${error.message}`, true);
+    }
+});
+
+btnGithubClearToken?.addEventListener('click', async () => {
+    try {
+        setStatusMessage(githubSyncStatus, 'Clearing GitHub token...');
+        const data = await saveGithubSyncSettings({ clearToken: true, enabledOverride: false });
+        setStatusMessage(githubSyncStatus, data.last_message || 'GitHub token cleared.');
+    } catch (error) {
+        console.error('Error clearing GitHub token:', error);
+        setStatusMessage(githubSyncStatus, `Failed to clear token: ${error.message}`, true);
+    }
+});
 
 // Toggle page enabled/disabled
 async function togglePage(pageId, enabled) {

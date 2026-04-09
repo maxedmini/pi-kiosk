@@ -12,11 +12,16 @@ import sqlite3
 import uuid
 import threading
 import time
+import tempfile
+import base64
 from datetime import datetime
 import shutil
 import io
 import tarfile
 import json
+from urllib import error as urllib_error
+from urllib import parse as urllib_parse
+from urllib import request as urllib_request
 from werkzeug.utils import secure_filename
 from flask import Flask, render_template, request, jsonify, send_from_directory
 from flask_socketio import SocketIO, emit
@@ -32,6 +37,7 @@ except ImportError:
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATABASE = os.path.join(BASE_DIR, 'pages.db')
 SETTINGS_FILE = os.path.join(BASE_DIR, 'settings.json')
+GITHUB_SYNC_TOKEN_FILE = os.path.join(BASE_DIR, 'github_sync_token.txt')
 UPLOAD_FOLDER = os.path.join(BASE_DIR, 'uploads')
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp'}
 MAX_CONTENT_LENGTH = 16 * 1024 * 1024  # 16MB max upload
@@ -51,20 +57,54 @@ ASSET_CACHE_BUST = str(int(time.time()))
 # Connected displays (in-memory tracking)
 # Key: socket session ID, Value: display info dict
 connected_displays = {}
+github_backup_timer = None
+github_backup_lock = threading.Lock()
+
+
+def default_settings():
+    """Return the default persisted settings."""
+    return {
+        'sync_enabled': True,
+        'preferred_hostname': None,
+        'tailscale_authkey': None,
+        'tailscale_authkey_set_at': None,
+        'github_sync': {
+            'enabled': False,
+            'repo': '',
+            'branch': 'main',
+            'path': 'backups/pi-kiosk-state.tgz',
+            'last_uploaded_at': None,
+            'last_message': None,
+            'last_error': None
+        }
+    }
+
+
+def normalize_settings(data):
+    """Merge saved settings with defaults."""
+    defaults = default_settings()
+    if not isinstance(data, dict):
+        return defaults
+
+    merged = {**defaults, **data}
+    github_sync = defaults['github_sync'].copy()
+    if isinstance(data.get('github_sync'), dict):
+        github_sync.update(data.get('github_sync', {}))
+    merged['github_sync'] = github_sync
+    return merged
 
 
 def load_settings():
     """Load server settings from disk."""
     if not os.path.exists(SETTINGS_FILE):
-        return {'sync_enabled': True, 'tailscale_authkey': None, 'tailscale_authkey_set_at': None}
+        return default_settings()
     try:
         with open(SETTINGS_FILE, 'r') as f:
             data = json.load(f)
-        if isinstance(data, dict):
-            return {**{'sync_enabled': True, 'tailscale_authkey': None, 'tailscale_authkey_set_at': None}, **data}
+        return normalize_settings(data)
     except Exception:
         pass
-    return {'sync_enabled': True, 'tailscale_authkey': None, 'tailscale_authkey_set_at': None}
+    return default_settings()
 
 
 def save_settings(settings):
@@ -74,6 +114,232 @@ def save_settings(settings):
             json.dump(settings, f)
     except Exception:
         pass
+
+
+def load_github_sync_token():
+    """Load the GitHub sync token from disk."""
+    try:
+        with open(GITHUB_SYNC_TOKEN_FILE, 'r', encoding='utf-8') as f:
+            return f.read().strip() or None
+    except Exception:
+        return None
+
+
+def save_github_sync_token(token):
+    """Persist the GitHub sync token outside the repo snapshot."""
+    token = (token or '').strip()
+    if not token:
+        clear_github_sync_token()
+        return
+
+    with open(GITHUB_SYNC_TOKEN_FILE, 'w', encoding='utf-8') as f:
+        f.write(token)
+
+    try:
+        os.chmod(GITHUB_SYNC_TOKEN_FILE, 0o600)
+    except Exception:
+        pass
+
+
+def clear_github_sync_token():
+    """Delete the stored GitHub sync token."""
+    try:
+        if os.path.exists(GITHUB_SYNC_TOKEN_FILE):
+            os.remove(GITHUB_SYNC_TOKEN_FILE)
+    except Exception:
+        pass
+
+
+def parse_github_repo(repo_value):
+    """Parse owner/repo or GitHub repo URL into owner and repo."""
+    repo_value = (repo_value or '').strip()
+    if not repo_value:
+        raise ValueError('GitHub repository is required')
+
+    if repo_value.startswith('https://github.com/'):
+        path = repo_value[len('https://github.com/'):]
+    elif repo_value.startswith('http://github.com/'):
+        path = repo_value[len('http://github.com/'):]
+    else:
+        path = repo_value
+
+    path = path.strip('/').removesuffix('.git')
+    parts = [p for p in path.split('/') if p]
+    if len(parts) != 2:
+        raise ValueError('Repository must be in owner/repo format')
+    return parts[0], parts[1]
+
+
+def get_github_sync_config():
+    """Return normalized GitHub sync config."""
+    config = SETTINGS.get('github_sync', {})
+    defaults = default_settings()['github_sync']
+    return {**defaults, **(config if isinstance(config, dict) else {})}
+
+
+def github_sync_response():
+    """Return API-safe GitHub sync config."""
+    config = get_github_sync_config()
+    return {
+        'enabled': bool(config.get('enabled')),
+        'repo': config.get('repo', ''),
+        'branch': config.get('branch', 'main'),
+        'path': config.get('path', 'backups/pi-kiosk-state.tgz'),
+        'has_token': bool(load_github_sync_token()),
+        'last_uploaded_at': config.get('last_uploaded_at'),
+        'last_message': config.get('last_message'),
+        'last_error': config.get('last_error')
+    }
+
+
+def build_backup_archive():
+    """Build a tar.gz archive containing settings, pages DB, and uploads."""
+    temp_dir = tempfile.mkdtemp(prefix='pi-kiosk-backup-')
+    archive_path = os.path.join(temp_dir, 'pi-kiosk-state.tgz')
+    snapshot_settings = normalize_settings(SETTINGS)
+    snapshot_settings.pop('tailscale_authkey', None)
+    snapshot_settings.pop('tailscale_authkey_set_at', None)
+
+    try:
+        if os.path.exists(DATABASE):
+            snapshot_db = os.path.join(temp_dir, 'pages.db')
+            source_conn = get_db()
+            dest_conn = sqlite3.connect(snapshot_db)
+            try:
+                source_conn.backup(dest_conn)
+            finally:
+                dest_conn.close()
+                source_conn.close()
+
+        snapshot_settings_path = os.path.join(temp_dir, 'settings.json')
+        with open(snapshot_settings_path, 'w', encoding='utf-8') as f:
+            json.dump(snapshot_settings, f)
+
+        manifest = {
+            'created_at': datetime.utcnow().isoformat() + 'Z',
+            'files': {
+                'pages_db': os.path.exists(DATABASE),
+                'settings_json': True,
+                'uploads': os.path.isdir(UPLOAD_FOLDER)
+            }
+        }
+        manifest_path = os.path.join(temp_dir, 'manifest.json')
+        with open(manifest_path, 'w', encoding='utf-8') as f:
+            json.dump(manifest, f)
+
+        with tarfile.open(archive_path, mode='w:gz') as tar:
+            if os.path.exists(os.path.join(temp_dir, 'pages.db')):
+                tar.add(os.path.join(temp_dir, 'pages.db'), arcname='pages.db')
+            tar.add(snapshot_settings_path, arcname='settings.json')
+            tar.add(manifest_path, arcname='manifest.json')
+            if os.path.isdir(UPLOAD_FOLDER):
+                tar.add(UPLOAD_FOLDER, arcname='uploads')
+
+        with open(archive_path, 'rb') as f:
+            return f.read()
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def upload_backup_to_github():
+    """Upload the current kiosk state archive to GitHub."""
+    config = get_github_sync_config()
+    if not config.get('enabled'):
+        return False, 'GitHub backup is disabled'
+
+    token = load_github_sync_token()
+    if not token:
+        return False, 'GitHub token is missing'
+
+    try:
+        owner, repo = parse_github_repo(config.get('repo'))
+    except ValueError as exc:
+        return False, str(exc)
+    branch = (config.get('branch') or 'main').strip() or 'main'
+    path = (config.get('path') or 'backups/pi-kiosk-state.tgz').strip().lstrip('/')
+    archive_bytes = build_backup_archive()
+    api_base = f'https://api.github.com/repos/{owner}/{repo}/contents/{urllib_parse.quote(path, safe="/")}'
+    headers = {
+        'Authorization': f'Bearer {token}',
+        'Accept': 'application/vnd.github+json',
+        'User-Agent': 'pi-kiosk'
+    }
+
+    existing_sha = None
+    get_request = urllib_request.Request(f'{api_base}?ref={urllib_parse.quote(branch)}', headers=headers, method='GET')
+    try:
+        with urllib_request.urlopen(get_request, timeout=30) as response:
+            existing = json.load(response)
+            if isinstance(existing, dict):
+                existing_sha = existing.get('sha')
+    except urllib_error.HTTPError as exc:
+        if exc.code != 404:
+            try:
+                detail = exc.read().decode('utf-8', errors='ignore')
+            except Exception:
+                detail = str(exc)
+            return False, f'GitHub lookup failed: {detail or exc.reason}'
+    except Exception as exc:
+        return False, f'GitHub lookup failed: {exc}'
+
+    payload = {
+        'message': f'Update kiosk backup {datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")}',
+        'content': base64.b64encode(archive_bytes).decode('ascii'),
+        'branch': branch
+    }
+    if existing_sha:
+        payload['sha'] = existing_sha
+
+    body = json.dumps(payload).encode('utf-8')
+    put_headers = {**headers, 'Content-Type': 'application/json'}
+    put_request = urllib_request.Request(api_base, data=body, headers=put_headers, method='PUT')
+    try:
+        with urllib_request.urlopen(put_request, timeout=60) as response:
+            result = json.load(response)
+    except urllib_error.HTTPError as exc:
+        try:
+            detail = exc.read().decode('utf-8', errors='ignore')
+        except Exception:
+            detail = str(exc)
+        return False, f'GitHub upload failed: {detail or exc.reason}'
+    except Exception as exc:
+        return False, f'GitHub upload failed: {exc}'
+
+    content = result.get('content', {}) if isinstance(result, dict) else {}
+    html_url = content.get('html_url')
+    return True, f'Backup uploaded to {html_url or f"{owner}/{repo}:{path}"}'
+
+
+def run_github_backup():
+    """Execute the queued GitHub backup and persist result state."""
+    with github_backup_lock:
+        success, message = upload_backup_to_github()
+        config = get_github_sync_config()
+        config['last_message'] = message if success else None
+        config['last_error'] = None if success else message
+        config['last_uploaded_at'] = datetime.now().isoformat() if success else config.get('last_uploaded_at')
+        SETTINGS['github_sync'] = config
+        save_settings(SETTINGS)
+        return success, message
+
+
+def queue_github_backup(delay_seconds=2):
+    """Queue a debounced GitHub backup after local changes."""
+    global github_backup_timer
+
+    config = get_github_sync_config()
+    if not config.get('enabled'):
+        return
+
+    if not load_github_sync_token():
+        return
+
+    if github_backup_timer and github_backup_timer.is_alive():
+        github_backup_timer.cancel()
+
+    github_backup_timer = threading.Timer(delay_seconds, run_github_backup)
+    github_backup_timer.daemon = True
+    github_backup_timer.start()
 
 
 SETTINGS = load_settings()
@@ -403,7 +669,7 @@ def serve_update_bundle():
             if rel_root.startswith(('uploads', 'venv')):
                 continue
             for name in files:
-                if name in ('pages.db',):
+                if name in ('pages.db', 'github_sync_token.txt'):
                     continue
                 path = os.path.join(root, name)
                 rel = os.path.relpath(path, BASE_DIR)
@@ -494,6 +760,7 @@ def add_page():
 
     # Notify all kiosks of update
     socketio.emit('pages_updated', {'action': 'add'})
+    queue_github_backup()
 
     return jsonify(dict_from_row(page)), 201
 
@@ -585,6 +852,7 @@ def update_page(page_id):
 
     # Notify all kiosks of update
     socketio.emit('pages_updated', {'action': 'update', 'page_id': page_id})
+    queue_github_backup()
 
     return jsonify(dict_from_row(page))
 
@@ -616,6 +884,7 @@ def delete_page(page_id):
 
     # Notify all kiosks of update
     socketio.emit('pages_updated', {'action': 'delete', 'page_id': page_id})
+    queue_github_backup()
 
     return jsonify({'success': True})
 
@@ -688,6 +957,7 @@ def bulk_update_pages():
     conn.close()
 
     socketio.emit('pages_updated', {'action': 'bulk_update'})
+    queue_github_backup()
     return jsonify({'success': True, 'updated': len(ids)})
 
 
@@ -721,6 +991,7 @@ def bulk_delete_pages():
     conn.close()
 
     socketio.emit('pages_updated', {'action': 'bulk_delete'})
+    queue_github_backup()
     return jsonify({'success': True, 'deleted': len(ids)})
 
 
@@ -745,6 +1016,7 @@ def reorder_pages():
 
     # Notify all kiosks of update
     socketio.emit('pages_updated', {'action': 'reorder'})
+    queue_github_backup()
 
     return jsonify({'success': True})
 
@@ -872,6 +1144,7 @@ def upload_image():
 
     # Notify all kiosks
     socketio.emit('pages_updated', {'action': 'add'})
+    queue_github_backup()
 
     page_dict = dict_from_row(page)
     page_dict['thumbnail'] = f"/uploads/{filename}"
@@ -943,6 +1216,10 @@ def set_system_hostname():
                 check=True,
                 capture_output=True
             )
+
+        SETTINGS['preferred_hostname'] = new_hostname
+        save_settings(SETTINGS)
+        queue_github_backup()
 
         return jsonify({
             'success': True,
@@ -1194,6 +1471,7 @@ def sync_settings():
     sync_enabled = bool(data.get('sync_enabled', True))
     SETTINGS['sync_enabled'] = sync_enabled
     save_settings(SETTINGS)
+    queue_github_backup()
     return jsonify({'sync_enabled': SETTINGS.get('sync_enabled', True)})
 
 
@@ -1212,6 +1490,7 @@ def tailscale_settings():
     SETTINGS['tailscale_authkey'] = authkey
     SETTINGS['tailscale_authkey_set_at'] = datetime.now().isoformat()
     save_settings(SETTINGS)
+    queue_github_backup()
 
     if data.get('push'):
         socketio.emit('control', {
@@ -1220,6 +1499,71 @@ def tailscale_settings():
         })
 
     return jsonify({'success': True, 'pushed': bool(data.get('push'))})
+
+
+@app.route('/api/settings/github-sync', methods=['GET', 'POST'])
+def github_sync_settings():
+    """Get or update GitHub backup settings."""
+    if request.method == 'GET':
+        return jsonify(github_sync_response())
+
+    data = request.get_json(silent=True) or {}
+    config = get_github_sync_config()
+    enabled = bool(data.get('enabled', False))
+    repo = (data.get('repo') or '').strip()
+    branch = (data.get('branch') or 'main').strip() or 'main'
+    path = (data.get('path') or 'backups/pi-kiosk-state.tgz').strip().lstrip('/')
+    token = data.get('token')
+    clear_token = bool(data.get('clear_token'))
+
+    if repo:
+        try:
+            parse_github_repo(repo)
+        except ValueError as exc:
+            return jsonify({'error': str(exc)}), 400
+
+    if enabled and not repo:
+        return jsonify({'error': 'Repository is required when GitHub backup is enabled'}), 400
+
+    if enabled and not path:
+        return jsonify({'error': 'Backup path is required when GitHub backup is enabled'}), 400
+
+    if clear_token:
+        clear_github_sync_token()
+    elif token is not None:
+        save_github_sync_token(token)
+
+    has_token = bool(load_github_sync_token())
+    if enabled and not has_token:
+        return jsonify({'error': 'A GitHub token is required to enable backups'}), 400
+
+    config.update({
+        'enabled': enabled,
+        'repo': repo,
+        'branch': branch,
+        'path': path
+    })
+    if not enabled:
+        config['last_error'] = None
+        config['last_message'] = None
+
+    SETTINGS['github_sync'] = config
+    save_settings(SETTINGS)
+
+    if enabled:
+        queue_github_backup(delay_seconds=1)
+
+    return jsonify(github_sync_response())
+
+
+@app.route('/api/settings/github-sync/backup', methods=['POST'])
+def github_sync_backup_now():
+    """Run a GitHub backup immediately."""
+    success, message = run_github_backup()
+    response = github_sync_response()
+    response['success'] = success
+    response['message'] = message
+    return jsonify(response), (200 if success else 400)
 
 
 # WebSocket Events

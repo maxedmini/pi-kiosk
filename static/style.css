@@ -760,9 +760,10 @@ section h2 {
     border-radius: var(--radius);
     box-shadow: var(--shadow-lg);
     width: 100%;
-    max-width: 500px;
+    max-width: 760px;
     max-height: 90vh;
     overflow-y: auto;
+    padding-bottom: 24px;
 }
 
 .modal-header {
@@ -793,7 +794,19 @@ section h2 {
 }
 
 .modal-content form {
-    padding: 20px;
+    padding: 0 24px;
+}
+
+.modal-content > hr,
+.modal-content > h4,
+.modal-content > p,
+.modal-content > div:not(.modal-header):not(.modal-actions):not(#editModal):not(#settingsModal) {
+    margin-left: 24px;
+    margin-right: 24px;
+}
+
+.modal-content > h4 {
+    margin-top: 20px;
 }
 
 .modal-content .form-group {
@@ -814,10 +827,26 @@ section h2 {
 .modal-actions {
     display: flex;
     gap: 10px;
+    flex-wrap: wrap;
     justify-content: flex-end;
     padding-top: 10px;
     border-top: 1px solid var(--gray-200);
     margin-top: 10px;
+}
+
+.modal-content code,
+.modal-content small,
+#githubSyncStatus {
+    word-break: break-word;
+    overflow-wrap: anywhere;
+}
+
+#githubSyncForm .modal-actions {
+    justify-content: space-between;
+}
+
+#githubSyncForm .modal-actions .btn {
+    flex: 1 1 180px;
 }
 
 /* Footer */
@@ -859,6 +888,33 @@ section h2 {
 @media (max-width: 600px) {
     .container {
         padding: 10px;
+    }
+
+    .modal {
+        padding: 10px;
+        align-items: flex-start;
+    }
+
+    .modal-content {
+        max-width: 100%;
+        max-height: calc(100vh - 20px);
+        padding-bottom: 16px;
+    }
+
+    .modal-header {
+        padding: 16px;
+    }
+
+    .modal-content form {
+        padding: 0 16px;
+    }
+
+    .modal-content > hr,
+    .modal-content > h4,
+    .modal-content > p,
+    .modal-content > div:not(.modal-header):not(.modal-actions):not(#editModal):not(#settingsModal) {
+        margin-left: 16px;
+        margin-right: 16px;
     }
 
     .header-main {
@@ -904,6 +960,17 @@ section h2 {
     .install-command code {
         overflow-x: auto;
         padding-bottom: 10px;
+    }
+
+    .modal-actions,
+    #githubSyncForm .modal-actions {
+        justify-content: stretch;
+    }
+
+    .modal-actions .btn,
+    #githubSyncForm .modal-actions .btn {
+        width: 100%;
+        flex: 1 1 100%;
     }
 }
 
