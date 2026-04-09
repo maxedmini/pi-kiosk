@@ -5,6 +5,7 @@
 # Usage:
 #   Master (server + optional display):
 #     sudo ./install.sh master [--hostname <name>]
+#     sudo ./install.sh master --restore-github-repo <owner/repo> [--restore-github-branch <branch>] [--restore-github-path <path>]
 #     curl -sSL http://<ip>:5000/install.sh | sudo bash -s -- master
 #
 #   Client (display only):
@@ -22,6 +23,10 @@ HOSTNAME_OVERRIDE="${HOSTNAME_OVERRIDE:-}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SKIP_UPDATES="${SKIP_UPDATES:-}"
 ENABLE_TAILSCALE="${ENABLE_TAILSCALE:-}"
+RESTORE_GITHUB_REPO="${RESTORE_GITHUB_REPO:-}"
+RESTORE_GITHUB_BRANCH="${RESTORE_GITHUB_BRANCH:-main}"
+RESTORE_GITHUB_PATH="${RESTORE_GITHUB_PATH:-backups/pi-kiosk-state.tgz}"
+RESTORE_GITHUB_TOKEN="${RESTORE_GITHUB_TOKEN:-}"
 
 # Allow passing hostname and skip-updates via flags to avoid sudo env issues
 ARGS=("$@")
@@ -44,6 +49,38 @@ while [ $i -lt $# ]; do
             ENABLE_TAILSCALE="1"
             i=$((i+1))
             ;;
+        --restore-github-repo)
+            RESTORE_GITHUB_REPO="${ARGS[$((i+1))]}"
+            i=$((i+2))
+            ;;
+        --restore-github-repo=*)
+            RESTORE_GITHUB_REPO="${ARGS[$i]#*=}"
+            i=$((i+1))
+            ;;
+        --restore-github-branch)
+            RESTORE_GITHUB_BRANCH="${ARGS[$((i+1))]}"
+            i=$((i+2))
+            ;;
+        --restore-github-branch=*)
+            RESTORE_GITHUB_BRANCH="${ARGS[$i]#*=}"
+            i=$((i+1))
+            ;;
+        --restore-github-path)
+            RESTORE_GITHUB_PATH="${ARGS[$((i+1))]}"
+            i=$((i+2))
+            ;;
+        --restore-github-path=*)
+            RESTORE_GITHUB_PATH="${ARGS[$i]#*=}"
+            i=$((i+1))
+            ;;
+        --restore-github-token)
+            RESTORE_GITHUB_TOKEN="${ARGS[$((i+1))]}"
+            i=$((i+2))
+            ;;
+        --restore-github-token=*)
+            RESTORE_GITHUB_TOKEN="${ARGS[$i]#*=}"
+            i=$((i+1))
+            ;;
         *)
             i=$((i+1))
             ;;
@@ -57,6 +94,9 @@ echo ""
 echo "Mode: $MODE"
 if [ "$MODE" = "client" ]; then
     echo "Master Server: $MASTER_IP"
+fi
+if [ -n "$RESTORE_GITHUB_REPO" ]; then
+    echo "Restore Backup: $RESTORE_GITHUB_REPO ($RESTORE_GITHUB_BRANCH:$RESTORE_GITHUB_PATH)"
 fi
 echo ""
 
@@ -83,6 +123,46 @@ if [ "$MODE" = "client" ] && [ "$MASTER_IP" = "localhost" ]; then
     echo "Usage: sudo ./install.sh client <master-ip>"
     exit 1
 fi
+
+restore_github_backup() {
+    if [ -z "$RESTORE_GITHUB_REPO" ]; then
+        return 0
+    fi
+
+    local archive_tmp api_url auth_header
+    archive_tmp="$(mktemp /tmp/pi-kiosk-backup.XXXXXX.tgz)"
+    api_url="https://api.github.com/repos/$RESTORE_GITHUB_REPO/contents/$RESTORE_GITHUB_PATH?ref=$RESTORE_GITHUB_BRANCH"
+
+    echo ""
+    echo "[3.5/8] Restoring kiosk backup from GitHub..."
+
+    if [ -n "$RESTORE_GITHUB_TOKEN" ]; then
+        auth_header="Authorization: Bearer $RESTORE_GITHUB_TOKEN"
+        if ! curl -fsSL -H "Accept: application/vnd.github.raw" -H "$auth_header" "$api_url" -o "$archive_tmp"; then
+            echo "Warning: Could not download GitHub backup archive"
+            rm -f "$archive_tmp"
+            return 1
+        fi
+    else
+        if ! curl -fsSL -H "Accept: application/vnd.github.raw" "$api_url" -o "$archive_tmp"; then
+            echo "Warning: Could not download GitHub backup archive"
+            echo "If the repository is private, rerun with --restore-github-token or RESTORE_GITHUB_TOKEN."
+            rm -f "$archive_tmp"
+            return 1
+        fi
+    fi
+
+    if tar -xzf "$archive_tmp" -C "$INSTALL_DIR"; then
+        echo "✓ Restored kiosk data from GitHub"
+    else
+        echo "Warning: Backup archive downloaded but could not be extracted"
+        rm -f "$archive_tmp"
+        return 1
+    fi
+
+    rm -f "$archive_tmp"
+    return 0
+}
 
 # Check if running on Raspberry Pi
 if ! grep -q "Raspberry Pi" /proc/cpuinfo 2>/dev/null && ! grep -q "BCM" /proc/cpuinfo 2>/dev/null; then
@@ -798,6 +878,17 @@ fi
 if [ "$MODE" = "master" ] && [ ! -f "$INSTALL_DIR/server.py" ]; then
     echo "Error: server.py missing in $INSTALL_DIR (file copy failed)"
     exit 1
+fi
+
+if [ "$MODE" = "master" ] && [ -n "$RESTORE_GITHUB_REPO" ]; then
+    restore_github_backup || true
+fi
+
+if [ -z "$HOSTNAME_OVERRIDE" ] && [ -f "$INSTALL_DIR/settings.json" ]; then
+    RESTORED_HOSTNAME="$(python3 -c 'import json,sys; data=json.load(open(sys.argv[1])); print(data.get("preferred_hostname") or "")' "$INSTALL_DIR/settings.json" 2>/dev/null || true)"
+    if [ -n "$RESTORED_HOSTNAME" ]; then
+        HOSTNAME_OVERRIDE="$RESTORED_HOSTNAME"
+    fi
 fi
 
 # Ensure ownership for runtime writes (pages.db, uploads, screenshots)

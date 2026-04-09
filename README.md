@@ -9,6 +9,7 @@ A complete kiosk display system for Raspberry Pi 4 that rotates through web page
 - **Multi-Pi Support** - Manage multiple Raspberry Pi displays from one web interface
 - **Login Persistence** - Browser remembers login sessions for authenticated websites
 - **Remote Management** - Control all displays from any device on your network
+- **GitHub Backup Restore** - Optionally auto-back up kiosk data to GitHub and restore it during reinstall
 - **Auto-Start** - Automatically starts on boot with systemd services
 - **Hidden Cursor** - Clean kiosk display with no visible mouse cursor
 - **Screen Always On** - Disables screen blanking and power saving
@@ -24,6 +25,20 @@ A complete kiosk display system for Raspberry Pi 4 that rotates through web page
 3. Select **Master** for your first Pi
 4. Enter your Pi's password when prompted
 5. Reboot the Pi when installation completes
+
+### Option 1B: Prepare an SD Card on Mac
+
+If you already have a Raspberry Pi OS SD card mounted on your Mac, you can double-click **`Pi SD Card Prep.command`**.
+
+This prepares the mounted boot partition for first boot by:
+
+- setting hostname
+- optionally writing WiFi config
+- enabling SSH
+- downloading this project from GitHub on first boot
+- running `install.sh` automatically on the Pi after boot
+
+Current requirement: the SD card must expose Raspberry Pi OS cloud-init files on the boot partition, including `user-data` and `meta-data`.
 
 ### Option 2: Install Directly on Pi
 
@@ -91,6 +106,30 @@ http://<pi-ip-address>:5000
 **Per-Display Controls** (in the Connected Displays section):
 - Each display shows its own status and controls
 - Control individual displays independently
+
+### Backing Up to GitHub
+
+Use the **GitHub Backup** section in Settings to automatically upload the kiosk database, uploaded images, and saved manager settings to a GitHub repository whenever they change.
+
+The GitHub token is stored locally on the master Pi and is not included in the backup archive.
+
+To restore the latest backup during a reinstall on a master Pi:
+
+```bash
+sudo ./install.sh master \
+  --restore-github-repo owner/repo \
+  --restore-github-branch main \
+  --restore-github-path backups/pi-kiosk-state.tgz
+```
+
+For a private repository, also provide a token:
+
+```bash
+RESTORE_GITHUB_TOKEN=github_pat_xxx sudo ./install.sh master \
+  --restore-github-repo owner/repo \
+  --restore-github-branch main \
+  --restore-github-path backups/pi-kiosk-state.tgz
+```
 
 ---
 
