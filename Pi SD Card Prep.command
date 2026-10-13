@@ -2,7 +2,7 @@
 #
 # Pi Kiosk SD Card Prep for Mac
 # Double-click this file to prepare a mounted Raspberry Pi OS SD card for
-# first-boot kiosk installation from GitHub.
+# first-boot kiosk installation from GitHub or local files.
 #
 
 set -euo pipefail
@@ -38,6 +38,9 @@ require_cmd() {
 
 require_cmd python3
 require_cmd tar
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+LOCAL_BUNDLE_NAME="pi-kiosk-local-bundle.tgz"
 
 trim() {
     printf '%s' "$1" | awk '{$1=$1};1'
@@ -80,7 +83,10 @@ discover_boot_volumes() {
 }
 
 print_color "$BLUE" "Scanning /Volumes for Raspberry Pi boot partitions..."
-mapfile -t BOOT_VOLUMES < <(discover_boot_volumes)
+BOOT_VOLUMES=()
+while IFS= read -r volume; do
+    [ -n "$volume" ] && BOOT_VOLUMES+=("$volume")
+done < <(discover_boot_volumes)
 
 if [ "${#BOOT_VOLUMES[@]}" -eq 0 ]; then
     print_color "$RED" "No Raspberry Pi boot partition was found."
@@ -169,24 +175,42 @@ if [ -n "$WIFI_SSID" ]; then
 fi
 
 echo ""
-read -p "GitHub repository (owner/repo or URL): " GITHUB_REPO_INPUT
-GITHUB_REPO_INPUT="$(trim "$GITHUB_REPO_INPUT")"
-if [ -z "$GITHUB_REPO_INPUT" ]; then
-    print_color "$RED" "GitHub repository is required."
-    pause_exit 1
-fi
-
-if ! GITHUB_REPO_SLUG="$(parse_repo_slug "$GITHUB_REPO_INPUT" 2>/dev/null)"; then
-    print_color "$RED" "Repository must look like owner/repo or https://github.com/owner/repo"
-    pause_exit 1
-fi
-
-read -p "GitHub branch [main]: " GITHUB_BRANCH_INPUT
-GITHUB_BRANCH="$(trim "${GITHUB_BRANCH_INPUT:-main}")"
-
-read -s -p "Optional GitHub token for private repos (leave blank for public): " GITHUB_TOKEN
+print_color "$BLUE" "Choose code source:"
+echo "  1) GitHub repository"
+echo "  2) Local files from this Mac"
 echo ""
-GITHUB_TOKEN="$(trim "$GITHUB_TOKEN")"
+read -p "Enter choice [1]: " SOURCE_CHOICE
+SOURCE_CHOICE=${SOURCE_CHOICE:-1}
+
+SOURCE_MODE="github"
+GITHUB_REPO_SLUG=""
+GITHUB_BRANCH="main"
+GITHUB_TOKEN=""
+if [ "$SOURCE_CHOICE" = "1" ]; then
+    read -p "GitHub repository (owner/repo or URL): " GITHUB_REPO_INPUT
+    GITHUB_REPO_INPUT="$(trim "$GITHUB_REPO_INPUT")"
+    if [ -z "$GITHUB_REPO_INPUT" ]; then
+        print_color "$RED" "GitHub repository is required."
+        pause_exit 1
+    fi
+
+    if ! GITHUB_REPO_SLUG="$(parse_repo_slug "$GITHUB_REPO_INPUT" 2>/dev/null)"; then
+        print_color "$RED" "Repository must look like owner/repo or https://github.com/owner/repo"
+        pause_exit 1
+    fi
+
+    read -p "GitHub branch [main]: " GITHUB_BRANCH_INPUT
+    GITHUB_BRANCH="$(trim "${GITHUB_BRANCH_INPUT:-main}")"
+
+    read -s -p "Optional GitHub token for private repos (leave blank for public): " GITHUB_TOKEN
+    echo ""
+    GITHUB_TOKEN="$(trim "$GITHUB_TOKEN")"
+elif [ "$SOURCE_CHOICE" = "2" ]; then
+    SOURCE_MODE="local"
+else
+    print_color "$RED" "Invalid source selection."
+    pause_exit 1
+fi
 
 echo ""
 read -p "Skip package updates during install? (y/n) [n]: " SKIP_UPDATES_CHOICE
@@ -207,9 +231,14 @@ if [ -n "$WIFI_SSID" ]; then
 else
     echo "  WiFi: unchanged / skipped"
 fi
-echo "  GitHub repo: $GITHUB_REPO_SLUG"
-echo "  GitHub branch: $GITHUB_BRANCH"
-[ -n "$GITHUB_TOKEN" ] && echo "  GitHub token: provided"
+if [ "$SOURCE_MODE" = "github" ]; then
+    echo "  Source: GitHub"
+    echo "  GitHub repo: $GITHUB_REPO_SLUG"
+    echo "  GitHub branch: $GITHUB_BRANCH"
+    [ -n "$GITHUB_TOKEN" ] && echo "  GitHub token: provided"
+else
+    echo "  Source: local files from $SCRIPT_DIR"
+fi
 [ "$SKIP_UPDATES" = "1" ] && echo "  Skip updates: yes"
 echo ""
 read -p "Write first-boot config to this SD card? (y/n) [y]: " CONFIRM
@@ -224,6 +253,18 @@ cp "$USER_DATA" "$USER_DATA.pi-kiosk-backup-$TIMESTAMP"
 
 touch "$SSH_SENTINEL"
 
+if [ "$SOURCE_MODE" = "local" ]; then
+    print_color "$BLUE" "Building local project bundle..."
+    rm -f "$BOOT_DIR/$LOCAL_BUNDLE_NAME"
+    COPYFILE_DISABLE=1 tar \
+        --exclude='.git' \
+        --exclude='__pycache__' \
+        --exclude='.DS_Store' \
+        --exclude='*.pyc' \
+        -czf "$BOOT_DIR/$LOCAL_BUNDLE_NAME" \
+        -C "$SCRIPT_DIR" .
+fi
+
 BOOTSTRAP_SCRIPT=$(cat <<EOF
 #!/bin/bash
 set -euxo pipefail
@@ -232,9 +273,11 @@ exec > >(tee -a /var/log/pi-kiosk-bootstrap.log) 2>&1
 MODE=$(yaml_single_quote "$INSTALL_MODE")
 MASTER_HOST=$(yaml_single_quote "$MASTER_HOST")
 HOSTNAME_OVERRIDE=$(yaml_single_quote "$HOSTNAME_OVERRIDE")
+SOURCE_MODE=$(yaml_single_quote "$SOURCE_MODE")
 GITHUB_REPO=$(yaml_single_quote "$GITHUB_REPO_SLUG")
 GITHUB_BRANCH=$(yaml_single_quote "$GITHUB_BRANCH")
 GITHUB_TOKEN=$(yaml_single_quote "$GITHUB_TOKEN")
+LOCAL_BUNDLE_NAME=$(yaml_single_quote "$LOCAL_BUNDLE_NAME")
 SKIP_UPDATES=$(yaml_single_quote "$SKIP_UPDATES")
 
 WORKDIR="\$(mktemp -d /tmp/pi-kiosk-bootstrap.XXXXXX)"
@@ -244,16 +287,27 @@ cleanup() {
 }
 trap cleanup EXIT
 
-if [ -n "\$GITHUB_TOKEN" ]; then
-    curl -fsSL \\
-      -H "Authorization: Bearer \$GITHUB_TOKEN" \\
-      -H "Accept: application/vnd.github+json" \\
-      "https://api.github.com/repos/\$GITHUB_REPO/tarball/\$GITHUB_BRANCH" \\
-      -o "\$ARCHIVE"
+if [ "\$SOURCE_MODE" = "local" ]; then
+    if [ -f "/boot/firmware/\$LOCAL_BUNDLE_NAME" ]; then
+        cp "/boot/firmware/\$LOCAL_BUNDLE_NAME" "\$ARCHIVE"
+    elif [ -f "/boot/\$LOCAL_BUNDLE_NAME" ]; then
+        cp "/boot/\$LOCAL_BUNDLE_NAME" "\$ARCHIVE"
+    else
+        echo "Local bundle \$LOCAL_BUNDLE_NAME was not found on the boot partition."
+        exit 1
+    fi
 else
-    curl -fsSL \\
-      "https://github.com/\$GITHUB_REPO/archive/refs/heads/\$GITHUB_BRANCH.tar.gz" \\
-      -o "\$ARCHIVE"
+    if [ -n "\$GITHUB_TOKEN" ]; then
+        curl -fsSL \\
+          -H "Authorization: Bearer \$GITHUB_TOKEN" \\
+          -H "Accept: application/vnd.github+json" \\
+          "https://api.github.com/repos/\$GITHUB_REPO/tarball/\$GITHUB_BRANCH" \\
+          -o "\$ARCHIVE"
+    else
+        curl -fsSL \\
+          "https://github.com/\$GITHUB_REPO/archive/refs/heads/\$GITHUB_BRANCH.tar.gz" \\
+          -o "\$ARCHIVE"
+    fi
 fi
 
 tar -xzf "\$ARCHIVE" -C "\$WORKDIR"
@@ -333,6 +387,7 @@ cat > "$BOOT_DIR/pi-kiosk-firstboot.txt" <<EOF
 Pi Kiosk first-boot install prepared on $TIMESTAMP
 Mode: $INSTALL_MODE
 Hostname: $HOSTNAME_OVERRIDE
+Source mode: $SOURCE_MODE
 GitHub repo: $GITHUB_REPO_SLUG
 GitHub branch: $GITHUB_BRANCH
 WiFi configured: $( [ -n "$WIFI_SSID" ] && echo "yes" || echo "no" )
@@ -344,12 +399,19 @@ echo "Files written:"
 echo "  $USER_DATA"
 [ -n "$WIFI_SSID" ] && echo "  $NETWORK_CONFIG"
 echo "  $SSH_SENTINEL"
+if [ "$SOURCE_MODE" = "local" ]; then
+    echo "  $BOOT_DIR/$LOCAL_BUNDLE_NAME"
+fi
 echo "  $BOOT_DIR/pi-kiosk-firstboot.txt"
 echo ""
 print_color "$YELLOW" "Next steps:"
 echo "  1. Eject the SD card."
 echo "  2. Insert it into the Pi and boot."
-echo "  3. Give it a few minutes to download from GitHub and run install.sh."
+if [ "$SOURCE_MODE" = "local" ]; then
+    echo "  3. Give it a few minutes to unpack the local bundle and run install.sh."
+else
+    echo "  3. Give it a few minutes to download from GitHub and run install.sh."
+fi
 echo "  4. Check /var/log/pi-kiosk-bootstrap.log on the Pi if first boot fails."
 echo ""
 print_color "$YELLOW" "Note:"

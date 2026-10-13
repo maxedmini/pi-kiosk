@@ -44,7 +44,7 @@ def get_tailscale_ip() -> Optional[str]:
         if result.returncode == 0:
             status = json.loads(result.stdout)
             self_peer = status.get('Self', {})
-            tailscale_ips = self_peer.get('TailscaleIPs', [])
+            tailscale_ips = self_peer.get('TailscaleIPs') or []
             # Return first IPv4 address
             for ip in tailscale_ips:
                 if ':' not in ip and ip.startswith('100.'):

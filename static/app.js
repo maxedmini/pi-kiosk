@@ -18,6 +18,7 @@ const pagesList = document.getElementById('pagesList');
 const pageCount = document.getElementById('pageCount');
 const emptyMessage = document.getElementById('emptyMessage');
 const addPageForm = document.getElementById('addPageForm');
+const generatePagesForm = document.getElementById('generatePagesForm');
 const uploadImageForm = document.getElementById('uploadImageForm');
 const editModal = document.getElementById('editModal');
 const editPageForm = document.getElementById('editPageForm');
@@ -45,6 +46,9 @@ const btnNext = document.getElementById('btnNext');
 const btnPause = document.getElementById('btnPause');
 const btnRefresh = document.getElementById('btnRefresh');
 const btnSync = document.getElementById('btnSync');
+const btnForceAm = document.getElementById('btnForceAm');
+const btnForcePm = document.getElementById('btnForcePm');
+const btnForceAuto = document.getElementById('btnForceAuto');
 const pauseIcon = document.getElementById('pauseIcon');
 const pauseText = document.getElementById('pauseText');
 const btnSettings = document.getElementById('btnSettings');
@@ -60,6 +64,19 @@ const btnBulkDuration = document.getElementById('btnBulkDuration');
 const btnBulkAssignDisplay = document.getElementById('btnBulkAssignDisplay');
 const bulkDisplaySelect = document.getElementById('bulkDisplaySelect');
 const clearSelectedPages = document.getElementById('clearSelectedPages');
+
+function setSessionMode(mode) {
+    const normalized = mode === 'AM' || mode === 'PM' ? mode : 'AUTO';
+    [
+        [btnForceAm, 'AM'],
+        [btnForcePm, 'PM'],
+        [btnForceAuto, 'AUTO']
+    ].forEach(([button, value]) => {
+        if (!button) return;
+        button.classList.toggle('active-session', normalized === value);
+        button.setAttribute('aria-pressed', normalized === value ? 'true' : 'false');
+    });
+}
 
 // Socket.IO Events
 socket.on('connect', () => {
@@ -98,6 +115,7 @@ async function loadSystemInfo() {
             ipDisplay += ` Tailscale: ${systemInfo.tailscale_ip}`;
         }
         systemIp.textContent = ipDisplay;
+        setSessionMode(systemInfo.session_mode);
 
         // For install commands, prefer Tailscale IP if available (for remote access)
         const installIpToUse = systemInfo.tailscale_ip || systemInfo.ip;
@@ -344,6 +362,7 @@ function updateDisplaySelects() {
     // Update all display select dropdowns
     const selects = [
         document.getElementById('newDisplayId'),
+        document.getElementById('generateDisplayId'),
         document.getElementById('imageDisplayId'),
         document.getElementById('editDisplayId'),
         bulkDisplaySelect
@@ -475,6 +494,7 @@ function renderDisplays() {
                     </button>
                     <button class="btn btn-small btn-secondary" onclick="sendControlToDisplay('${display.id}', 'next')" title="Next">&#9654;</button>
                     <button class="btn btn-small btn-secondary" onclick="sendControlToDisplay('${display.id}', 'refresh')" title="Refresh">&#8635;</button>
+                    <button class="btn btn-small btn-danger" onclick="rebootDisplay('${display.id}', '${escapeHtml(display.hostname)}')" title="Reboot this Pi">Reboot</button>
                     ${adminActive
                         ? `<button class="btn btn-small btn-secondary" onclick="exitAdminMode('${display.id}')" title="Exit Admin Mode">Exit</button>`
                         : `<button class="btn btn-small btn-warning" onclick="openAdminMode('${display.id}')" title="Admin Mode">Admin</button>`}
@@ -521,9 +541,17 @@ function renderPages() {
 
     // Find current page IDs from all displays
     const currentPageIds = displays.map(d => d.current_page_id);
+    const currentPages = pages.filter(p => currentPageIds.includes(p.id));
+    const activeGroup = currentPages.some(p => (p.name || '').trim().startsWith('PM '))
+        ? 'PM'
+        : currentPages.some(p => (p.name || '').trim().startsWith('AM '))
+            ? 'AM'
+            : null;
 
     pagesList.innerHTML = pages.map(page => {
         const isCurrent = currentPageIds.includes(page.id);
+        const pageName = (page.name || '').trim();
+        const isCurrentGroup = activeGroup && pageName.startsWith(`${activeGroup} `);
         const isImage = page.type === 'image';
         const thumbnailHtml = isImage && page.thumbnail
             ? `<img src="${escapeHtml(page.thumbnail)}" alt="">`
@@ -535,13 +563,16 @@ function renderPages() {
         const scheduleBadge = page.schedule_enabled && scheduleLabel
             ? `<span class="page-schedule-badge ${page.is_active ? 'active' : 'inactive'}" title="Scheduled: ${escapeHtml(scheduleLabel)}">${escapeHtml(scheduleLabel)}</span>`
             : '';
+        const nowPlayingBadge = isCurrentGroup
+            ? `<span class="page-now-badge" title="${isCurrent ? 'Currently on screen' : 'Part of the active session'}">${isCurrent ? 'On screen' : `${activeGroup} active`}</span>`
+            : '';
         const scheduleMini = page.schedule_enabled
             ? renderScheduleTimelineMini(normalizeScheduleRanges(page))
             : '';
         const isSelected = selectedPageIds.has(page.id);
 
         return `
-            <li class="page-item ${isCurrent ? 'current' : ''} ${!page.enabled ? 'disabled' : ''}" data-id="${page.id}">
+            <li class="page-item ${isCurrentGroup ? 'current' : ''} ${isCurrent ? 'onscreen' : ''} ${!page.enabled ? 'disabled' : ''}" data-id="${page.id}">
                 <div class="page-select">
                     <input type="checkbox" class="page-select-checkbox" data-id="${page.id}" ${isSelected ? 'checked' : ''}>
                 </div>
@@ -552,6 +583,7 @@ function renderPages() {
                         ${escapeHtml(page.name || 'Unnamed')}
                         <span class="page-type-badge ${isImage ? 'image' : ''}">${isImage ? 'Image' : 'URL'}</span>
                         ${displayBadge}
+                        ${nowPlayingBadge}
                         ${scheduleBadge}
                     </div>
                     <div class="page-url" title="${escapeHtml(page.url || '')}">${escapeHtml(page.url || '')}</div>
@@ -668,6 +700,60 @@ btnSync.addEventListener('click', async () => {
         alert('Failed to sync displays');
     } finally {
         btnSync.disabled = false;
+    }
+});
+
+async function forceSession(sessionName) {
+    const button = sessionName === 'AM' ? btnForceAm : btnForcePm;
+    const pageName = `${sessionName} Overview`;
+    try {
+        button.disabled = true;
+        await fetchJson('/api/displays/force-session', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ session: sessionName })
+        });
+        setSessionMode(sessionName);
+        await loadPages();
+        const target = pages.find(p => p.enabled && (p.name || '').trim() === pageName);
+        if (!target) {
+            alert(`${pageName} page not found. Generate pages first.`);
+            return;
+        }
+        await fetch('/api/displays/sync', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ page_id: target.id, delay_ms: 3000, reload: true })
+        });
+    } catch (error) {
+        console.error(`Error forcing ${sessionName}:`, error);
+        alert(`Failed to force ${sessionName}`);
+    } finally {
+        button.disabled = false;
+    }
+}
+
+btnForceAm.addEventListener('click', () => forceSession('AM'));
+btnForcePm.addEventListener('click', () => forceSession('PM'));
+btnForceAuto.addEventListener('click', async () => {
+    try {
+        btnForceAuto.disabled = true;
+        await fetchJson('/api/displays/force-session', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ session: 'AUTO' })
+        });
+        setSessionMode('AUTO');
+        await fetch('/api/displays/sync', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ delay_ms: 3000, reload: true })
+        });
+    } catch (error) {
+        console.error('Error returning to auto schedule:', error);
+        alert('Failed to return to auto schedule');
+    } finally {
+        btnForceAuto.disabled = false;
     }
 });
 
@@ -833,6 +919,24 @@ function exitAdminMode(displayId) {
     sendControlToDisplay(displayId, 'exit_admin_mode');
 }
 
+async function rebootDisplay(displayId, hostname) {
+    if (!confirm(`Reboot ${hostname || 'this Pi'} now?`)) {
+        return;
+    }
+
+    try {
+        const data = await fetchJson('/api/system/reboot-display', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ display_id: displayId })
+        });
+        alert(data.message || 'Reboot command sent');
+    } catch (error) {
+        console.error('Error rebooting display:', error);
+        alert('Failed to reboot display: ' + error.message);
+    }
+}
+
 function goToPage(pageId) {
     sendControl('goto', { page_id: pageId });
 }
@@ -855,6 +959,13 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
 // Refresh checkbox toggle handlers
 document.getElementById('newRefresh').addEventListener('change', (e) => {
     document.getElementById('newRefreshIntervalGroup').style.display = e.target.checked ? 'block' : 'none';
+});
+
+document.getElementById('generateRefresh').addEventListener('change', (e) => {
+    const intervalGroup = document.getElementById('generateRefreshIntervalGroup');
+    if (intervalGroup) {
+        intervalGroup.style.display = e.target.checked ? 'block' : 'none';
+    }
 });
 
 document.getElementById('imageRefresh').addEventListener('change', (e) => {
@@ -928,6 +1039,287 @@ addPageForm.addEventListener('submit', async (e) => {
     } catch (error) {
         console.error('Error adding page:', error);
         alert('Failed to add page');
+    }
+});
+
+function buildGeneratedMatPages(baseUrl, count, namePrefix) {
+    const match = baseUrl.match(/\/mat\/o\/(\d+)(?=\/|\?|#|$)/);
+    if (!match) {
+        throw new Error('Use a Smoothcomp mat URL containing /mat/o/<number>.');
+    }
+
+    const baseId = parseInt(match[1], 10);
+    if (!Number.isFinite(baseId)) {
+        throw new Error('Could not read the mat id from the URL.');
+    }
+
+    const prefix = namePrefix.trim() || 'Mat';
+    return Array.from({ length: count }, (_, index) => {
+        const matNumber = index + 1;
+        const matId = baseId + index;
+        return {
+            name: `${prefix} ${matNumber}`,
+            url: baseUrl.replace(/\/mat\/o\/\d+(?=\/|\?|#|$)/, `/mat/o/${matId}`)
+        };
+    });
+}
+
+function inferMatUrl(baseUrl, offset) {
+    const match = baseUrl.match(/\/mat\/o\/(\d+)(?=\/|\?|#|$)/);
+    if (!match) {
+        throw new Error('Use a Smoothcomp mat URL containing /mat/o/<number>.');
+    }
+    const baseId = parseInt(match[1], 10);
+    if (!Number.isFinite(baseId)) {
+        throw new Error('Could not read the mat id from the URL.');
+    }
+    return baseUrl.replace(/\/mat\/o\/\d+(?=\/|\?|#|$)/, `/mat/o/${baseId + offset}`);
+}
+
+function matIdFromUrl(url) {
+    const match = (url || '').match(/\/mat\/o\/(\d+)(?=\/|\?|#|$)/);
+    return match ? parseInt(match[1], 10) : null;
+}
+
+function matsToPages(mats, count, prefix) {
+    return (mats || []).slice(0, count).map((mat, index) => ({
+        name: `${prefix} ${index + 1}`,
+        url: mat.url
+    }));
+}
+
+function buildMatPagesFromId(eventNumber, startId, count, prefix) {
+    return Array.from({ length: count }, (_, index) => ({
+        name: `${prefix} ${index + 1}`,
+        url: `https://oddfoxevents.smoothcomp.com/en/event/${eventNumber}/schedule/mat/o/${startId + index}?tvmode=1`
+    }));
+}
+
+function buildGeneratedEventPages(config, amDiscoveredMats, pmDiscoveredMats) {
+    const amRange = [{ start: config.amStart, end: config.pmStart }];
+    const pmRange = [{ start: config.pmStart, end: config.pmEnd }];
+    const overviewUrl = `https://oddfoxevents.smoothcomp.com/en/event/${config.eventNumber}/schedule/matches?tvmode=1&listView=full`;
+    const pmOverviewUrl = config.pmCategoryId
+        ? `https://oddfoxevents.smoothcomp.com/en/event/${config.eventNumber}/schedule/matches?catid=${encodeURIComponent(config.pmCategoryId)}&tvmode=1&listView=full`
+        : overviewUrl;
+    const normalDiscovered = Array.isArray(amDiscoveredMats) ? amDiscoveredMats : [];
+    const categoryDiscovered = Array.isArray(pmDiscoveredMats) ? pmDiscoveredMats : [];
+    const normalAm = normalDiscovered.filter(mat => mat.session === 'AM');
+    const normalPm = normalDiscovered.filter(mat => mat.session === 'PM');
+    const categoryPm = categoryDiscovered.filter(mat => mat.session === 'PM');
+    const unsessioned = normalDiscovered.filter(mat => !mat.session);
+
+    let amMats = matsToPages(normalAm, config.amCount, 'AM Mat');
+    let pmMats = matsToPages(categoryPm.length ? categoryPm : normalPm, config.pmCount, 'PM Mat');
+
+    if (!amMats.length && !pmMats.length && unsessioned.length) {
+        amMats = matsToPages(unsessioned, config.amCount, 'AM Mat');
+        pmMats = matsToPages(unsessioned, config.pmCount, 'PM Mat');
+    }
+
+    if (amMats.length < config.amCount && pmMats.length >= config.pmCount) {
+        const firstPmId = matIdFromUrl(pmMats[0].url);
+        if (Number.isFinite(firstPmId) && firstPmId > config.amCount) {
+            amMats = buildMatPagesFromId(config.eventNumber, firstPmId - config.amCount, config.amCount, 'AM Mat');
+        }
+    }
+
+    if (pmMats.length < config.pmCount && amMats.length >= config.amCount) {
+        const firstAmId = matIdFromUrl(amMats[0].url);
+        if (Number.isFinite(firstAmId)) {
+            pmMats = buildMatPagesFromId(config.eventNumber, firstAmId + config.amCount, config.pmCount, 'PM Mat');
+        }
+    }
+
+    if (amMats.length < config.amCount && config.amMatUrl) {
+        amMats = buildGeneratedMatPages(config.amMatUrl, config.amCount, 'AM Mat');
+    }
+
+    if (pmMats.length < config.pmCount) {
+        if (config.pmMatUrl) {
+            pmMats = buildGeneratedMatPages(config.pmMatUrl, config.pmCount, 'PM Mat');
+        } else if (config.amMatUrl) {
+            pmMats = buildGeneratedMatPages(inferMatUrl(config.amMatUrl, config.amCount), config.pmCount, 'PM Mat');
+        }
+    }
+
+    if (amMats.length < config.amCount || pmMats.length < config.pmCount) {
+        throw new Error(`Could not confidently find ${config.amCount} AM and ${config.pmCount} PM mats for this event.`);
+    }
+
+    return [
+        {
+            name: 'AM Overview',
+            url: overviewUrl,
+            schedule_ranges: amRange
+        },
+        ...amMats.map(page => ({
+            ...page,
+            schedule_ranges: amRange
+        })),
+        {
+            name: 'PM Overview',
+            url: pmOverviewUrl,
+            schedule_ranges: pmRange
+        },
+        ...pmMats.map(page => ({
+            ...page,
+            schedule_ranges: pmRange
+        }))
+    ];
+}
+
+function isGeneratedEventPage(page) {
+    const name = (page?.name || '').trim();
+    return name === 'AM Overview'
+        || name === 'PM Overview'
+        || /^AM Mat \d+$/.test(name)
+        || /^PM Mat \d+$/.test(name);
+}
+
+async function deleteExistingGeneratedPages() {
+    const ids = pages.filter(isGeneratedEventPage).map(page => page.id);
+    if (!ids.length) return 0;
+    await fetchJson('/api/pages/bulk', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids })
+    });
+    selectedPageIds.forEach(id => {
+        if (ids.includes(id)) selectedPageIds.delete(id);
+    });
+    return ids.length;
+}
+
+function getGenerateConfig() {
+    const eventNumber = document.getElementById('generateEventNumber').value.trim();
+    const pmCategoryId = document.getElementById('generatePmCategoryId').value.trim();
+    const amMatUrl = document.getElementById('generateAmMatUrl').value.trim();
+    const pmMatUrl = document.getElementById('generatePmMatUrl').value.trim();
+    const matCount = Math.min(Math.max(parseInt(document.getElementById('generateMatCount').value, 10) || 3, 1), 50);
+    const amCount = matCount;
+    const pmCount = matCount;
+    const amStart = document.getElementById('generateAmStart').value || '08:50';
+    const pmStart = document.getElementById('generatePmStart').value || '12:00';
+    const pmEnd = document.getElementById('generatePmEnd').value || '17:00';
+
+    if (!/^\d+$/.test(eventNumber)) throw new Error('Smoothcomp event number is required.');
+    if (timeToMinutes(amStart) === null || timeToMinutes(pmStart) === null || timeToMinutes(pmEnd) === null) {
+        throw new Error('AM start, PM start, and PM end times are required.');
+    }
+    if (amStart === pmStart) {
+        throw new Error('AM start and PM start must be different.');
+    }
+    if (pmStart === pmEnd) {
+        throw new Error('PM start and PM end must be different.');
+    }
+
+    if (pmCategoryId && !/^\d+$/.test(pmCategoryId)) throw new Error('PM category ID must be numeric.');
+
+    return { eventNumber, pmCategoryId, amMatUrl, pmMatUrl, amCount, pmCount, amStart, pmStart, pmEnd };
+}
+
+function updateGeneratePreview() {
+    const preview = document.getElementById('generatePreview');
+    if (!preview) return;
+
+    const eventNumber = document.getElementById('generateEventNumber').value.trim();
+    if (!eventNumber) {
+        preview.textContent = 'Creates AM/PM overview and mat pages from the event number.';
+        return;
+    }
+
+    try {
+        const config = getGenerateConfig();
+        const total = 2 + config.amCount + config.pmCount;
+        preview.textContent = `${total} pages: AM Overview, ${config.amCount} AM mats, PM Overview, ${config.pmCount} PM mats`;
+    } catch (error) {
+        preview.textContent = error.message;
+    }
+}
+
+async function discoverSmoothcompMats(eventNumber, categoryId = '') {
+    const url = categoryId
+        ? `/api/smoothcomp/events/${encodeURIComponent(eventNumber)}/mats?catid=${encodeURIComponent(categoryId)}`
+        : `/api/smoothcomp/events/${encodeURIComponent(eventNumber)}/mats`;
+    const data = await fetchJson(url);
+    return Array.isArray(data.mats) ? data.mats : [];
+}
+
+[
+    'generateEventNumber',
+    'generatePmCategoryId',
+    'generateMatCount',
+    'generateAmStart',
+    'generatePmStart',
+    'generatePmEnd'
+].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener('input', updateGeneratePreview);
+});
+
+generatePagesForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+
+    const overviewDuration = parseInt(document.getElementById('generateOverviewDuration').value, 10) || 60;
+    const matDuration = parseInt(document.getElementById('generateMatDuration').value, 10) || 5;
+    const display_id = document.getElementById('generateDisplayId').value || null;
+    const refresh = document.getElementById('generateRefresh').checked;
+    const refresh_interval = parseInt(document.getElementById('generateRefreshInterval').value, 10) || 1;
+
+    let config;
+    let generated;
+    try {
+        config = getGenerateConfig();
+        const amDiscoveredMats = await discoverSmoothcompMats(config.eventNumber);
+        const pmDiscoveredMats = await discoverSmoothcompMats(config.eventNumber, config.pmCategoryId);
+        generated = buildGeneratedEventPages(config, amDiscoveredMats, pmDiscoveredMats);
+    } catch (error) {
+        alert(error.message);
+        return;
+    }
+
+    try {
+        await deleteExistingGeneratedPages();
+
+        for (const page of generated) {
+            await fetchJson('/api/pages', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        ...page,
+                    duration: page.name.includes('Overview') ? overviewDuration : matDuration,
+                    display_id,
+                    refresh,
+                    refresh_interval,
+                    schedule_enabled: true,
+                    schedule_start: page.schedule_ranges[0].start,
+                    schedule_end: page.schedule_ranges[0].end,
+                    schedule_ranges: page.schedule_ranges
+                })
+            });
+        }
+
+        document.getElementById('generateEventNumber').value = '';
+        document.getElementById('generatePmCategoryId').value = '45664';
+        document.getElementById('generateMatCount').value = '3';
+        document.getElementById('generateAmStart').value = '08:50';
+        document.getElementById('generatePmStart').value = '12:00';
+        document.getElementById('generatePmEnd').value = '17:00';
+        document.getElementById('generateOverviewDuration').value = '60';
+        document.getElementById('generateMatDuration').value = '5';
+        document.getElementById('generateDisplayId').value = '';
+        document.getElementById('generateRefresh').checked = false;
+        document.getElementById('generateRefreshInterval').value = '1';
+        const generateRefreshIntervalGroup = document.getElementById('generateRefreshIntervalGroup');
+        if (generateRefreshIntervalGroup) {
+            generateRefreshIntervalGroup.style.display = 'none';
+        }
+        updateGeneratePreview();
+        loadPages();
+    } catch (error) {
+        console.error('Error generating pages:', error);
+        alert('Failed to generate pages: ' + error.message);
     }
 });
 

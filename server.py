@@ -19,6 +19,8 @@ import shutil
 import io
 import tarfile
 import json
+import html
+import re
 from urllib import error as urllib_error
 from urllib import parse as urllib_parse
 from urllib import request as urllib_request
@@ -59,6 +61,8 @@ ASSET_CACHE_BUST = str(int(time.time()))
 connected_displays = {}
 github_backup_timer = None
 github_backup_lock = threading.Lock()
+force_session_override = None
+session_schedule_baseline = None
 
 
 def default_settings():
@@ -68,6 +72,7 @@ def default_settings():
         'preferred_hostname': None,
         'tailscale_authkey': None,
         'tailscale_authkey_set_at': None,
+        'session_schedule_baseline': None,
         'github_sync': {
             'enabled': False,
             'repo': '',
@@ -506,6 +511,105 @@ def is_page_active_now(page):
         return True
 
 
+def is_page_visible_for_kiosk(page):
+    """Return whether a page should be sent to kiosks, honoring force AM/PM override."""
+    name = (page.get('name') or '').strip()
+    if force_session_override in ('AM', 'PM'):
+        if name.startswith(f'{force_session_override} '):
+            return True
+        if name.startswith('AM ') or name.startswith('PM '):
+            return False
+    return is_page_active_now(page)
+
+
+def time_to_minutes(value):
+    """Convert HH:MM to minutes since midnight."""
+    hour, minute = value.split(':', 1)
+    return int(hour) * 60 + int(minute)
+
+
+def first_schedule_range(page, fallback):
+    """Return first normalized schedule range for a page, or fallback."""
+    ranges = _normalize_schedule_ranges(page or {})
+    return ranges[0] if ranges else fallback
+
+
+def get_generated_session_ranges(conn):
+    """Read the normal generated AM/PM schedule ranges."""
+    am_page = conn.execute('SELECT * FROM pages WHERE name = ?', ('AM Overview',)).fetchone()
+    pm_page = conn.execute('SELECT * FROM pages WHERE name = ?', ('PM Overview',)).fetchone()
+    return {
+        'AM': first_schedule_range(dict_from_row(am_page) if am_page else None, {'start': '08:50', 'end': '12:00'}),
+        'PM': first_schedule_range(dict_from_row(pm_page) if pm_page else None, {'start': '12:00', 'end': '17:00'})
+    }
+
+
+def valid_session_schedule_baseline(value):
+    """Return a normalized AM/PM baseline dict, or None if invalid."""
+    if not isinstance(value, dict):
+        return None
+    baseline = {}
+    for session in ('AM', 'PM'):
+        range_data = value.get(session)
+        if not isinstance(range_data, dict):
+            return None
+        start = range_data.get('start')
+        end = range_data.get('end')
+        if not isinstance(start, str) or not isinstance(end, str) or not start or not end:
+            return None
+        try:
+            time_to_minutes(start)
+            time_to_minutes(end)
+        except Exception:
+            return None
+        baseline[session] = {'start': start, 'end': end}
+    return baseline
+
+
+def apply_generated_session_ranges(conn, group_ranges):
+    """Apply AM/PM schedule ranges to generated event pages."""
+    updated = 0
+    for group_name, range_data in group_ranges.items():
+        ranges_json = json.dumps([range_data])
+        cursor = conn.execute(
+            '''
+            UPDATE pages
+            SET schedule_enabled = 1,
+                schedule_start = ?,
+                schedule_end = ?,
+                schedule_ranges = ?
+            WHERE name = ? OR name LIKE ?
+            ''',
+            (
+                range_data['start'],
+                range_data['end'],
+                ranges_json,
+                f'{group_name} Overview',
+                f'{group_name} Mat %'
+            )
+        )
+        updated += cursor.rowcount
+    return updated
+
+
+def restore_auto_session_on_boot():
+    """Ensure a restarted server always begins in Auto session mode."""
+    global force_session_override, session_schedule_baseline
+    force_session_override = None
+    baseline = valid_session_schedule_baseline(SETTINGS.get('session_schedule_baseline'))
+    if not baseline:
+        session_schedule_baseline = None
+        return
+
+    conn = get_db()
+    try:
+        apply_generated_session_ranges(conn, baseline)
+        conn.commit()
+        session_schedule_baseline = baseline
+    finally:
+        conn.close()
+
+
 def allowed_file(filename):
     """Check if file extension is allowed."""
     return '.' in filename and \
@@ -616,6 +720,76 @@ def view_external():
     return redirect(url)
 
 
+@app.route('/api/smoothcomp/events/<event_number>/mats')
+def discover_smoothcomp_mats(event_number):
+    """Discover Smoothcomp mat URLs for an event from the public schedule page."""
+    if not event_number.isdigit():
+        return jsonify({'error': 'Event number must be numeric'}), 400
+
+    catid = (request.args.get('catid') or '').strip()
+    if catid and not catid.isdigit():
+        return jsonify({'error': 'Category ID must be numeric'}), 400
+
+    base_url = f'https://oddfoxevents.smoothcomp.com/en/event/{event_number}/schedule/matches'
+    query_params = {'tvmode': '1', 'listView': 'full'}
+    if catid:
+        query_params['catid'] = catid
+    query = urllib_parse.urlencode(query_params)
+    overview_url = f'{base_url}?{query}'
+    req = urllib_request.Request(
+        overview_url,
+        headers={
+            'User-Agent': 'pi-kiosk/1.0',
+            'Accept': 'text/html,application/xhtml+xml'
+        }
+    )
+
+    try:
+        with urllib_request.urlopen(req, timeout=15) as response:
+            raw = response.read(2 * 1024 * 1024)
+    except urllib_error.HTTPError as exc:
+        return jsonify({'error': f'Smoothcomp returned HTTP {exc.code}'}), 502
+    except Exception as exc:
+        return jsonify({'error': f'Could not fetch Smoothcomp schedule: {exc}'}), 502
+
+    text = html.unescape(raw.decode('utf-8', errors='replace'))
+    pattern = re.compile(
+        r'(?:href=["\'])?([^"\'\s<>]*?/en/event/' + re.escape(event_number) +
+        r'/schedule/mat/(?:o/)?(\d+)[^"\'\s<>]*).*?<h3[^>]*class=["\'][^"\']*panel-title[^"\']*["\'][^>]*>(.*?)</h3>',
+        re.IGNORECASE | re.DOTALL
+    )
+    seen = set()
+    mats = []
+
+    for match in pattern.finditer(text):
+        mat_id = match.group(2)
+        if mat_id in seen:
+            continue
+        seen.add(mat_id)
+        title = re.sub(r'\s+', ' ', re.sub(r'<.*?>', '', match.group(3))).strip()
+        title_upper = title.upper()
+        session = None
+        if re.search(r'\bAM\b', title_upper):
+            session = 'AM'
+        elif re.search(r'\bPM\b', title_upper):
+            session = 'PM'
+        url = f'https://oddfoxevents.smoothcomp.com/en/event/{event_number}/schedule/mat/o/{mat_id}?tvmode=1'
+        mats.append({
+            'id': mat_id,
+            'name': f'Mat {len(mats) + 1}',
+            'title': title or f'Mat {len(mats) + 1}',
+            'session': session,
+            'url': url
+        })
+
+    return jsonify({
+        'event_number': event_number,
+        'catid': catid or None,
+        'overview_url': overview_url,
+        'mats': mats
+    })
+
+
 @app.route('/api/display/screenshot', methods=['POST'])
 def upload_display_screenshot():
     """Upload a screenshot from a kiosk display."""
@@ -711,7 +885,7 @@ def get_pages():
             page_dict['url'] = f"/view/image/{page_dict['filename']}"
             page_dict['thumbnail'] = f"/uploads/{page_dict['filename']}"
         # Add is_active field for UI display
-        page_dict['is_active'] = is_page_active_now(page_dict)
+        page_dict['is_active'] = is_page_visible_for_kiosk(page_dict)
         result.append(page_dict)
 
     return jsonify(result)
@@ -720,6 +894,7 @@ def get_pages():
 @app.route('/api/pages', methods=['POST'])
 def add_page():
     """Add a new page (URL type)."""
+    global session_schedule_baseline
     data = request.get_json()
 
     if not data or not data.get('url'):
@@ -757,6 +932,12 @@ def add_page():
 
     page = conn.execute('SELECT * FROM pages WHERE id = ?', (cursor.lastrowid,)).fetchone()
     conn.close()
+
+    page_name = (data.get('name') or '').strip()
+    if page_name in ('AM Overview', 'PM Overview') or page_name.startswith(('AM Mat ', 'PM Mat ')):
+        session_schedule_baseline = None
+        SETTINGS['session_schedule_baseline'] = None
+        save_settings(SETTINGS)
 
     # Notify all kiosks of update
     socketio.emit('pages_updated', {'action': 'add'})
@@ -1049,7 +1230,7 @@ def get_page_urls():
     for p in pages:
         page = dict_from_row(p)
         # Skip pages not active at current time
-        if not is_page_active_now(page):
+        if not is_page_visible_for_kiosk(page):
             continue
         if page['type'] == 'image' and page['filename']:
             # For images, use the viewer URL
@@ -1159,7 +1340,8 @@ def get_system_hostname():
     """Get current system hostname and network information."""
     response_data = {
         'hostname': get_hostname(),
-        'ip': get_local_ip()
+        'ip': get_local_ip(),
+        'session_mode': force_session_override or 'AUTO'
     }
 
     # Add Tailscale information if available
@@ -1250,6 +1432,35 @@ def restart_displays():
         'success': True,
         'message': f'Restart command sent to {len(connected_displays)} display(s)'
     })
+
+
+def _reboot_display(display_id):
+    """Reboot a single connected display."""
+    if display_id not in connected_displays:
+        return jsonify({'error': 'Display not found'}), 404
+
+    hostname = connected_displays[display_id].get('hostname', 'Unknown')
+    socketio.emit('reboot_system', room=display_id)
+    return jsonify({
+        'success': True,
+        'message': f'Reboot command sent to {hostname}'
+    })
+
+
+@app.route('/api/system/reboot-display', methods=['POST'])
+def reboot_display():
+    """Reboot a single connected display using JSON or form payload."""
+    data = request.get_json(silent=True) or request.form or {}
+    display_id = str(data.get('display_id', '')).strip()
+    if not display_id:
+        return jsonify({'error': 'display_id is required'}), 400
+    return _reboot_display(display_id)
+
+
+@app.route('/api/system/reboot-display/<display_id>', methods=['POST'])
+def reboot_display_legacy(display_id):
+    """Backward-compatible route for older clients."""
+    return _reboot_display(display_id)
 
 
 @app.route('/api/system/reboot-all', methods=['POST'])
@@ -1459,6 +1670,55 @@ def sync_displays():
         'sync_enabled': SETTINGS.get('sync_enabled', True)
     })
     return jsonify({'success': True, 'sync_at': sync_at})
+
+
+@app.route('/api/displays/force-session', methods=['POST'])
+def force_display_session():
+    """Force AM/PM by updating generated page schedules, or restore normal timings."""
+    global force_session_override, session_schedule_baseline
+    data = request.get_json(silent=True) or {}
+    session = (data.get('session') or '').upper()
+    if session not in ('AM', 'PM', 'AUTO'):
+        return jsonify({'error': 'session must be AM, PM, or AUTO'}), 400
+
+    force_session_override = None if session == 'AUTO' else session
+    conn = get_db()
+    if session_schedule_baseline is None:
+        session_schedule_baseline = valid_session_schedule_baseline(SETTINGS.get('session_schedule_baseline'))
+    if session_schedule_baseline is None:
+        session_schedule_baseline = get_generated_session_ranges(conn)
+        SETTINGS['session_schedule_baseline'] = session_schedule_baseline
+        save_settings(SETTINGS)
+    am_range = session_schedule_baseline['AM']
+    pm_range = session_schedule_baseline['PM']
+
+    if session == 'AUTO':
+        group_ranges = {'AM': am_range, 'PM': pm_range}
+    else:
+        now = datetime.now()
+        current_minutes = now.hour * 60 + now.minute
+        am_start = time_to_minutes(am_range['start'])
+        am_end = time_to_minutes(am_range['end'])
+        pm_start = time_to_minutes(pm_range['start'])
+        pm_end = time_to_minutes(pm_range['end'])
+        active_range = pm_range if pm_start <= current_minutes < pm_end else am_range
+        inactive_range = am_range if active_range == pm_range else pm_range
+        other_session = 'PM' if session == 'AM' else 'AM'
+        group_ranges = {
+            session: active_range,
+            other_session: inactive_range
+        }
+
+    updated = apply_generated_session_ranges(conn, group_ranges)
+    conn.commit()
+    conn.close()
+
+    socketio.emit('pages_updated', {
+        'action': 'force_session',
+        'session': session
+    })
+    queue_github_backup()
+    return jsonify({'success': True, 'session': session, 'updated': updated, 'ranges': group_ranges})
 
 
 @app.route('/api/settings/sync', methods=['GET', 'POST'])
@@ -1726,7 +1986,7 @@ def handle_request_pages(data=None):
     for p in pages:
         page_dict = dict_from_row(p)
         # Skip pages not active at current time
-        if not is_page_active_now(page_dict):
+        if not is_page_visible_for_kiosk(page_dict):
             continue
         # For images, ensure we use the viewer URL
         if page_dict['type'] == 'image' and page_dict['filename']:
@@ -1783,6 +2043,7 @@ def schedule_checker_thread():
 
 if __name__ == '__main__':
     init_db()
+    restore_auto_session_on_boot()
 
     # Start background schedule checker
     schedule_thread = threading.Thread(target=schedule_checker_thread, daemon=True)

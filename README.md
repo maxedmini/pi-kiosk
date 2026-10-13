@@ -35,7 +35,7 @@ This prepares the mounted boot partition for first boot by:
 - setting hostname
 - optionally writing WiFi config
 - enabling SSH
-- downloading this project from GitHub on first boot
+- either downloading this project from GitHub or using the current local files
 - running `install.sh` automatically on the Pi after boot
 
 Current requirement: the SD card must expose Raspberry Pi OS cloud-init files on the boot partition, including `user-data` and `meta-data`.
@@ -68,6 +68,16 @@ After installation and reboot, access the management interface from any browser:
 ```
 http://<pi-ip-address>:5000
 ```
+
+For the current event Pis, SSH in as:
+
+```bash
+ssh event@event.local
+```
+
+The password is in `LOGINS.local.md` (kept out of git — this repo is public).
+
+Other Pis may be reachable as `event1.local`, `event2.local`, or by their Tailscale IP.
 
 ---
 

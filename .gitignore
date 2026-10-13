@@ -27,3 +27,6 @@ Thumbs.db
 
 # Logs
 *.log
+
+# Local-only notes with logins
+*.local.md
