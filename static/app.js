@@ -1272,7 +1272,15 @@ generatePagesForm.addEventListener('submit', async (e) => {
     try {
         config = getGenerateConfig();
         const amDiscoveredMats = await discoverSmoothcompMats(config.eventNumber);
-        const pmDiscoveredMats = await discoverSmoothcompMats(config.eventNumber, config.pmCategoryId);
+        let pmDiscoveredMats = amDiscoveredMats;
+        if (config.pmCategoryId) {
+            try {
+                pmDiscoveredMats = await discoverSmoothcompMats(config.eventNumber, config.pmCategoryId);
+            } catch (error) {
+                // Category not in this event (Smoothcomp 404): use the full schedule instead.
+                config.pmCategoryId = '';
+            }
+        }
         generated = buildGeneratedEventPages(config, amDiscoveredMats, pmDiscoveredMats);
     } catch (error) {
         alert(error.message);
@@ -1301,7 +1309,7 @@ generatePagesForm.addEventListener('submit', async (e) => {
         }
 
         document.getElementById('generateEventNumber').value = '';
-        document.getElementById('generatePmCategoryId').value = '45664';
+        document.getElementById('generatePmCategoryId').value = '';
         document.getElementById('generateMatCount').value = '3';
         document.getElementById('generateAmStart').value = '08:50';
         document.getElementById('generatePmStart').value = '12:00';
