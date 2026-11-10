@@ -413,6 +413,8 @@ def init_db():
         conn.execute("ALTER TABLE pages ADD COLUMN schedule_end TEXT")
     if 'schedule_ranges' not in columns:
         conn.execute("ALTER TABLE pages ADD COLUMN schedule_ranges TEXT")
+    if 'hide_during_mats' not in columns:
+        conn.execute("ALTER TABLE pages ADD COLUMN hide_during_mats INTEGER DEFAULT 0")
 
     conn.commit()
     conn.close()
@@ -520,6 +522,23 @@ def is_page_visible_for_kiosk(page):
         if name.startswith('AM ') or name.startswith('PM '):
             return False
     return is_page_active_now(page)
+
+
+MAT_PAGE_NAME_RE = re.compile(r'^(AM|PM) (Overview|Mat \d+)$')
+
+
+def is_mat_page(page):
+    """True for the generated event pages (AM/PM Overview, AM/PM Mat N)."""
+    return bool(MAT_PAGE_NAME_RE.match((page.get('name') or '').strip()))
+
+
+def filter_pages_for_kiosk(pages):
+    """Pages a kiosk should show now: schedule/override filter, then drop
+    'only when no mat is on' pages while any mat page is showing."""
+    visible = [p for p in pages if is_page_visible_for_kiosk(p)]
+    if any(is_mat_page(p) for p in visible):
+        visible = [p for p in visible if not p.get('hide_during_mats')]
+    return visible
 
 
 def time_to_minutes(value):
@@ -876,16 +895,20 @@ def get_pages():
         ).fetchall()
     conn.close()
 
+    all_dicts = [dict_from_row(p) for p in pages]
+    shown_ids = {p['id'] for p in filter_pages_for_kiosk([p for p in all_dicts if p.get('enabled')])}
+
     result = []
-    for p in pages:
-        page_dict = dict_from_row(p)
+    for page_dict in all_dicts:
         page_dict['schedule_ranges'] = _normalize_schedule_ranges(page_dict)
         # For images, generate the viewer URL
         if page_dict['type'] == 'image' and page_dict['filename']:
             page_dict['url'] = f"/view/image/{page_dict['filename']}"
             page_dict['thumbnail'] = f"/uploads/{page_dict['filename']}"
         # Add is_active field for UI display
-        page_dict['is_active'] = is_page_visible_for_kiosk(page_dict)
+        page_dict['is_active'] = is_page_visible_for_kiosk(page_dict) and (
+            not page_dict.get('enabled') or page_dict['id'] in shown_ids
+        )
         result.append(page_dict)
 
     return jsonify(result)
@@ -911,7 +934,7 @@ def add_page():
         schedule_ranges = json.dumps(schedule_ranges)
 
     cursor = conn.execute(
-        'INSERT INTO pages (url, name, duration, position, enabled, type, display_id, refresh, refresh_interval, schedule_enabled, schedule_start, schedule_end, schedule_ranges) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        'INSERT INTO pages (url, name, duration, position, enabled, type, display_id, refresh, refresh_interval, schedule_enabled, schedule_start, schedule_end, schedule_ranges, hide_during_mats) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
         (
             data['url'],
             data.get('name', ''),
@@ -925,7 +948,8 @@ def add_page():
             1 if data.get('schedule_enabled', False) else 0,
             data.get('schedule_start'),
             data.get('schedule_end'),
-            schedule_ranges
+            schedule_ranges,
+            1 if data.get('hide_during_mats', False) else 0
         )
     )
     conn.commit()
@@ -1019,6 +1043,9 @@ def update_page(page_id):
             schedule_ranges = json.dumps(schedule_ranges)
         updates.append('schedule_ranges = ?')
         values.append(schedule_ranges)
+    if 'hide_during_mats' in data:
+        updates.append('hide_during_mats = ?')
+        values.append(1 if data['hide_during_mats'] else 0)
 
     if updates:
         values.append(page_id)
@@ -1124,6 +1151,9 @@ def bulk_update_pages():
             schedule_ranges = json.dumps(schedule_ranges)
         updates.append('schedule_ranges = ?')
         values.append(schedule_ranges)
+    if 'hide_during_mats' in updates_data:
+        updates.append('hide_during_mats = ?')
+        values.append(1 if updates_data['hide_during_mats'] else 0)
 
     if not updates:
         return jsonify({'error': 'No valid updates provided'}), 400
@@ -1227,11 +1257,7 @@ def get_page_urls():
 
     urls = []
     durations = []
-    for p in pages:
-        page = dict_from_row(p)
-        # Skip pages not active at current time
-        if not is_page_visible_for_kiosk(page):
-            continue
+    for page in filter_pages_for_kiosk([dict_from_row(p) for p in pages]):
         if page['type'] == 'image' and page['filename']:
             # For images, use the viewer URL
             urls.append(f"/view/image/{page['filename']}")
@@ -1286,6 +1312,7 @@ def upload_image():
     schedule_start = request.form.get('schedule_start') or None
     schedule_end = request.form.get('schedule_end') or None
     schedule_ranges = request.form.get('schedule_ranges') or None
+    hide_during_mats = request.form.get('hide_during_mats', '').lower() in ('true', '1', 'yes', 'on')
 
     # Add to database
     conn = get_db()
@@ -1294,7 +1321,7 @@ def upload_image():
         next_pos = (max_pos or 0) + 1
 
         cursor = conn.execute(
-            'INSERT INTO pages (url, name, duration, position, enabled, type, filename, display_id, refresh, refresh_interval, schedule_enabled, schedule_start, schedule_end, schedule_ranges) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+            'INSERT INTO pages (url, name, duration, position, enabled, type, filename, display_id, refresh, refresh_interval, schedule_enabled, schedule_start, schedule_end, schedule_ranges, hide_during_mats) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
             (
                 f"/view/image/{filename}",
                 name,
@@ -1309,7 +1336,8 @@ def upload_image():
                 1 if schedule_enabled else 0,
                 schedule_start,
                 schedule_end,
-                schedule_ranges
+                schedule_ranges,
+                1 if hide_during_mats else 0
             )
         )
 
@@ -1983,11 +2011,7 @@ def handle_request_pages(data=None):
     conn.close()
 
     result = []
-    for p in pages:
-        page_dict = dict_from_row(p)
-        # Skip pages not active at current time
-        if not is_page_visible_for_kiosk(page_dict):
-            continue
+    for page_dict in filter_pages_for_kiosk([dict_from_row(p) for p in pages]):
         # For images, ensure we use the viewer URL
         if page_dict['type'] == 'image' and page_dict['filename']:
             page_dict['url'] = f"/view/image/{page_dict['filename']}"

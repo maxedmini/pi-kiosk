@@ -563,6 +563,9 @@ function renderPages() {
         const scheduleBadge = page.schedule_enabled && scheduleLabel
             ? `<span class="page-schedule-badge ${page.is_active ? 'active' : 'inactive'}" title="Scheduled: ${escapeHtml(scheduleLabel)}">${escapeHtml(scheduleLabel)}</span>`
             : '';
+        const noMatsBadge = page.hide_during_mats
+            ? `<span class="page-schedule-badge ${page.is_active ? 'active' : 'inactive'}" title="Only shows when no mat is on${page.is_active ? '' : ' (mats are on now)'}">No mats</span>`
+            : '';
         const nowPlayingBadge = isCurrentGroup
             ? `<span class="page-now-badge" title="${isCurrent ? 'Currently on screen' : 'Part of the active session'}">${isCurrent ? 'On screen' : `${activeGroup} active`}</span>`
             : '';
@@ -585,6 +588,7 @@ function renderPages() {
                         ${displayBadge}
                         ${nowPlayingBadge}
                         ${scheduleBadge}
+                        ${noMatsBadge}
                     </div>
                     <div class="page-url" title="${escapeHtml(page.url || '')}">${escapeHtml(page.url || '')}</div>
                     ${scheduleMini}
@@ -1373,6 +1377,7 @@ uploadImageForm.addEventListener('submit', async (e) => {
     const imageScheduleRanges = collectScheduleRanges('imageScheduleRows');
     const imagePrimaryRange = imageScheduleRanges[0] || {};
     formData.append('schedule_enabled', imageScheduleEnabled ? 'true' : 'false');
+    formData.append('hide_during_mats', document.getElementById('imageHideDuringMats').checked ? 'true' : 'false');
     formData.append('schedule_start', imagePrimaryRange.start || '');
     formData.append('schedule_end', imagePrimaryRange.end || '');
     formData.append('schedule_ranges', JSON.stringify(imageScheduleRanges));
@@ -1398,6 +1403,7 @@ uploadImageForm.addEventListener('submit', async (e) => {
         document.getElementById('imageRefreshIntervalGroup').style.display = 'none';
         document.getElementById('imageScheduleEnabled').checked = false;
         document.getElementById('imageScheduleFields').style.display = 'none';
+        document.getElementById('imageHideDuringMats').checked = false;
         filePreview.innerHTML = '';
 
         loadPages();
@@ -1423,6 +1429,7 @@ function editPage(pageId) {
     document.getElementById('editRefreshInterval').value = page.refresh_interval || 1;
     document.getElementById('editRefreshIntervalGroup').style.display = page.refresh ? 'block' : 'none';
     document.getElementById('editScheduleEnabled').checked = page.schedule_enabled;
+    document.getElementById('editHideDuringMats').checked = !!page.hide_during_mats;
     const editRanges = normalizeScheduleRanges(page);
     setScheduleRows('editScheduleRows', editRanges);
     document.getElementById('editScheduleFields').style.display = page.schedule_enabled ? 'flex' : 'none';
@@ -1472,7 +1479,8 @@ editPageForm.addEventListener('submit', async (e) => {
         refresh: document.getElementById('editRefresh').checked,
         refresh_interval: parseInt(document.getElementById('editRefreshInterval').value) || 1,
         schedule_enabled: document.getElementById('editScheduleEnabled').checked,
-        schedule_ranges: collectScheduleRanges('editScheduleRows')
+        schedule_ranges: collectScheduleRanges('editScheduleRows'),
+        hide_during_mats: document.getElementById('editHideDuringMats').checked
     };
     const editPrimaryRange = data.schedule_ranges[0] || {};
     data.schedule_start = editPrimaryRange.start || null;

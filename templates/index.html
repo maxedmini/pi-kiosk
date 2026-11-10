@@ -252,6 +252,11 @@
                         <input type="number" id="imageRefreshInterval" value="1" min="1" max="100">
                     </div>
                     <div class="form-group checkbox-group">
+                        <label title="Skip this image while any AM/PM overview or mat page is showing">
+                            <input type="checkbox" id="imageHideDuringMats"> Only show when no mat is on
+                        </label>
+                    </div>
+                    <div class="form-group checkbox-group">
                         <label title="Only show during specific hours">
                             <input type="checkbox" id="imageScheduleEnabled"> Time Schedule
                         </label>
@@ -336,6 +341,11 @@
                 <div class="form-group refresh-interval-group" id="editRefreshIntervalGroup" style="display:none;">
                     <label for="editRefreshInterval">Refresh every N switches</label>
                     <input type="number" id="editRefreshInterval" value="1" min="1" max="100">
+                </div>
+                <div class="form-group">
+                    <label title="Skip this page while any AM/PM overview or mat page is showing">
+                        <input type="checkbox" id="editHideDuringMats"> Only show when no mat is on
+                    </label>
                 </div>
                 <div class="form-group">
                     <label>
